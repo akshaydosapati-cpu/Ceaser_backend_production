@@ -63,7 +63,7 @@ This repository includes `render.yaml`.
 2. Add the production values from `.env.example` in the Render dashboard.
 3. Never upload or commit the local `.env` file.
 4. Set `CORS_ORIGINS` to the deployed frontend URL.
-5. Update Google and other OAuth callback URLs to use the deployed Render URL.
+5. Update Google and other OAuth callback URLs to use https://ceaser-backend-production-ur04.onrender.com.
 
 Render runs:
 

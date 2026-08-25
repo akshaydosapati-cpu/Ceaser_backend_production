@@ -24,7 +24,7 @@ CEASER_CLOUD_CODING_ENABLED=false
 DEV_AUTH_BYPASS=false
 ```
 
-Configure integration credentials and callback URLs in the provider consoles.
+Configure integration credentials and callback URLs in the provider consoles. Use https://ceaser-backend-production-ur04.onrender.com for the backend callback host in production examples.
 Do not expose provider, GitHub, Supabase service-role, or encryption credentials
 to frontend or desktop builds.
 
