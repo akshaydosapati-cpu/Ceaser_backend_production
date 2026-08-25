@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import Any
 
 from app.core.config.settings import settings
-from app.intelligence.ai.errors import AIServiceUnavailableError
+from app.intelligence.ai.errors import AIServiceUnavailableError, allows_provider_fallback
 from app.intelligence.ai.model_router import ModelRequest, request_for_chat
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ def generate_text_sync(*, instructions: str, input_text: str, temperature: float
                     exc.category,
                     exc.detail,
                 )
-                if not exc.retryable or index >= len(attempts) - 1:
+                if not allows_provider_fallback(exc) or index >= len(attempts) - 1:
                     break
             except Exception as exc:  # noqa: BLE001
                 last_error = AIServiceUnavailableError(repr(exc), retryable=True, provider=provider_name, category="unexpected")
@@ -175,7 +175,7 @@ async def stream_text(
                 exc.category,
                 exc.detail,
             )
-            if not exc.retryable or index >= len(attempts) - 1:
+            if not allows_provider_fallback(exc) or index >= len(attempts) - 1:
                 break
         except Exception as exc:  # noqa: BLE001
             last_error = AIServiceUnavailableError(repr(exc), retryable=True, provider=provider_name, category="unexpected")

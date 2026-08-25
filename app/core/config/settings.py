@@ -42,7 +42,7 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("HUGGINGFACE_API_KEY", "HF_TOKEN"),
     )
-    groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
+    groq_model: str = Field(default="openai/gpt-oss-20b", alias="GROQ_MODEL")
     huggingface_model: str = Field(
         default="mistralai/Devstral-Small-2507",
         validation_alias=AliasChoices("HUGGINGFACE_MODEL", "HF_MODEL"),
@@ -336,6 +336,15 @@ class Settings(BaseSettings):
         if value.startswith("postgresql://"):
             return value.replace("postgresql://", "postgresql+psycopg://", 1)
         return value
+
+    @field_validator("groq_model", mode="before")
+    @classmethod
+    def migrate_retired_groq_model(cls, value: str) -> str:
+        # Groq removed this model from hosted inference. Keep existing Render
+        # environments operational until their GROQ_MODEL value is updated.
+        if str(value).strip() == "llama-3.3-70b-versatile":
+            return "openai/gpt-oss-20b"
+        return str(value).strip()
 
 
 settings = Settings()

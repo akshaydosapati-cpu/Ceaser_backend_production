@@ -5,7 +5,7 @@ from time import monotonic, perf_counter
 from typing import Any
 
 from app.core.config.settings import settings
-from app.intelligence.ai.errors import AIServiceUnavailableError
+from app.intelligence.ai.errors import AIServiceUnavailableError, allows_provider_fallback
 from app.intelligence.ai.model_router.models import FailureCategory, HealthState, ModelEvent, ModelRequest, ModelResponse, RoutingPolicy, SelectedModel
 from app.intelligence.ai.model_router.registry import ModelRegistry
 
@@ -70,7 +70,7 @@ class ModelRouter:
                 self.record_failure(selection.model.provider_id, normalized, model_id=selection.model.model_id)
                 history.append({"model_id": selection.model.model_id, "provider_id": selection.model.provider_id, "category": category.value})
                 self._event("model.attempt_failed", request, history[-1] | {"attempt": index + 1})
-                if not normalized.retryable or category == FailureCategory.AUTHENTICATION:
+                if not allows_provider_fallback(normalized) or category == FailureCategory.AUTHENTICATION:
                     break
                 if index + 1 < len(attempts):
                     self._event("model.fallback", request, {"from_model_id": selection.model.model_id, "attempt": index + 2})

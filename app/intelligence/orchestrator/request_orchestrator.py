@@ -7,7 +7,7 @@ from time import perf_counter
 from sqlalchemy.orm import Session
 
 from app.core.config.settings import settings
-from app.intelligence.ai.errors import AIServiceUnavailableError
+from app.intelligence.ai.errors import AIServiceUnavailableError, allows_provider_fallback
 from app.intelligence.ai.ai_provider_service import ai_provider_service
 from app.intelligence.formatting.response_formatter import response_formatter
 from app.intelligence.knowledge.context_builder import context_builder
@@ -78,7 +78,7 @@ class RequestOrchestrator:
                     exc.category,
                     exc.detail,
                 )
-                if not exc.retryable or index >= len(attempts) - 1:
+                if not allows_provider_fallback(exc) or index >= len(attempts) - 1:
                     break
             except Exception as exc:  # noqa: BLE001
                 last_error = AIServiceUnavailableError(repr(exc), retryable=True, provider=provider_name, category="unexpected")

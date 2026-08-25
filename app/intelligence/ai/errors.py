@@ -17,3 +17,8 @@ class AIServiceUnavailableError(RuntimeError):
         self.retryable = retryable
         self.provider = provider
         self.category = category
+
+
+def allows_provider_fallback(error: AIServiceUnavailableError) -> bool:
+    """Return whether another eligible provider may safely handle the request."""
+    return error.retryable or str(error.category or "").lower() == "model_unavailable"
