@@ -578,6 +578,15 @@ class CeaserOrchestrator:
         else:
             request_mode = "DIRECT_CHAT"
 
+        simple_chat_request = (
+            request_mode == "DIRECT_CHAT"
+            and not attached_documents
+            and not file_ids
+            and not report_request
+            and not self._requires_rich_context(message)
+            and not force_live_web_search
+        )
+
         # Ordinary chat does not need specialist-agent resolution. Keep this
         # branch before agent selection so registry/workflow work cannot delay
         # the provider hot path.
@@ -601,7 +610,11 @@ class CeaserOrchestrator:
         # Deep user-scoped retrieval is reserved for requests that explicitly
         # need files or remembered personal context. Stable explanations and
         # writing/coding questions take the direct provider path.
-        if route_decision.route in {KnowledgeRoute.MEMORY, KnowledgeRoute.FILE}:
+        if not simple_chat_request and (
+            route_decision.route in {KnowledgeRoute.MEMORY, KnowledgeRoute.FILE, KnowledgeRoute.RESEARCH}
+            or report_request
+            or self._requires_rich_context(message)
+        ):
             memory_first_context = self._knowledge_context(
                 user_id=user_id,
                 message=effective_message,
@@ -641,7 +654,7 @@ class CeaserOrchestrator:
         mark_stage("web_and_tool_decision")
 
         lightweight_follow_up = route_decision.route is KnowledgeRoute.FOLLOW_UP
-        lightweight_normal = request_mode in {"DIRECT_CHAT", "FRESH_WEB_CHAT"}
+        lightweight_normal = simple_chat_request or request_mode in {"DIRECT_CHAT", "FRESH_WEB_CHAT"}
         knowledge_context = memory_first_context or (self._lightweight_follow_up_context(follow_up_trace) if lightweight_follow_up else self._minimal_chat_context() if lightweight_normal else self._knowledge_context(
             user_id=user_id,
             message=effective_message,
@@ -2084,14 +2097,13 @@ class CeaserOrchestrator:
                 "persisted_state": {},
             }
 
-        # Read full history for inexpensive topic resolution, but keep the LLM
-        # payload compact. Sending every stored report/answer adds latency and
-        # can make a focused follow-up drift back to an older request.
-        messages = self.conversations.list_recent_messages(conversation_id=conversation.id, limit=12)
+        # Read only a compact slice of history so follow-up continuity stays
+        # available without dragging the full conversation through every turn.
+        messages = self.conversations.list_recent_messages(conversation_id=conversation.id, limit=8)
         persisted_state = conversation.conversation_state or {}
-        recent_messages = messages[-12:]
-        generation_messages = messages[-6:]
-        older_messages = messages[:-6]
+        recent_messages = messages[-8:]
+        generation_messages = messages[-4:]
+        older_messages = messages[:-4]
         compact_messages = []
         previous_research = None
         latest_user_message = None

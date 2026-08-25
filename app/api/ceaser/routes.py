@@ -299,9 +299,6 @@ async def ceaser_chat_stream(payload: CeaserChatRequest, user: Annotated[User, D
         completed_meaningfully = False
         try:
             yield event("response.started", {"id": request_id, "status": "streaming", "conversation_id": conversation_id})
-            yield event("activity", {"event_id": f"evt_{request_id}_start", "task_id": request_id, "agent": "CEASER", "category": "response", "stage": "understanding", "status": "running", "title": "Understanding request", "safe_metadata": {}})
-            yield event("status", {"state": "received"})
-            yield event("status", {"state": "understanding_request"})
             orchestrator = CeaserOrchestrator(db)
             trace["agent_started_ms"] = round((perf_counter() - started) * 1000, 2)
             logger.info("ceaser_latency request_id=%s agent_started_ms=%s", request_id, trace["agent_started_ms"])
@@ -351,7 +348,6 @@ async def ceaser_chat_stream(payload: CeaserChatRequest, user: Annotated[User, D
             )
 
             if prepared["mode"] == "direct":
-                yield event("status", {"state": "generating"})
                 trace["endpoint_ttft_ms"] = round((perf_counter() - started) * 1000, 2)
                 trace["total_time_ms"] = trace["endpoint_ttft_ms"]
                 trace["output_tokens"] = max(1, round(len(prepared["response"]) / 4)) if prepared.get("response") else 0
@@ -371,18 +367,20 @@ async def ceaser_chat_stream(payload: CeaserChatRequest, user: Annotated[User, D
                 yield event("complete", response)
                 completed_meaningfully = bool(response.get("response"))
                 logger.info(
-                    "ceaser_latency request_id=%s request_received_ms=0 agent_started_ms=%s llm_request_sent_ms=not_applicable first_token_ms=%s last_token_ms=%s",
+                    "[CEASER PERF] request_id=%s context_ms=%s model_start_ms=%s ttft_ms=%s generation_ms=%s total_ms=%s context_tokens=%s output_tokens=%s",
                     request_id,
-                    trace.get("agent_started_ms"),
+                    prepared.get("observability", {}).get("prepare_ms"),
+                    "not_applicable",
                     trace.get("endpoint_ttft_ms"),
+                    "not_applicable",
                     trace.get("total_time_ms"),
+                    prepared.get("observability", {}).get("context_tokens"),
+                    trace.get("output_tokens"),
                 )
                 logger.info("ceaser_stream_stage request_id=%s stage=request_complete total_ms=%s", request_id, trace["total_time_ms"])
                 return
 
-            yield event("status", {"state": "retrieving_context"})
             stage_marks["context_ready"] = perf_counter()
-            yield event("status", {"state": "generating"})
             trace["llm_request_sent_ms"] = round((perf_counter() - started) * 1000, 2)
             logger.info("ceaser_latency request_id=%s llm_request_sent_ms=%s", request_id, trace["llm_request_sent_ms"])
             chunks: list[str] = []
@@ -445,6 +443,17 @@ async def ceaser_chat_stream(payload: CeaserChatRequest, user: Annotated[User, D
                 trace.get("llm_request_sent_ms"),
                 trace.get("endpoint_ttft_ms"),
                 trace.get("total_time_ms"),
+            )
+            logger.info(
+                "[CEASER PERF] request_id=%s context_ms=%s model_start_ms=%s ttft_ms=%s generation_ms=%s total_ms=%s context_tokens=%s output_tokens=%s",
+                request_id,
+                prepared.get("observability", {}).get("prepare_ms"),
+                trace.get("llm_request_sent_ms"),
+                trace.get("endpoint_ttft_ms"),
+                trace.get("provider_generation_ms") or trace.get("total_time_ms"),
+                trace.get("total_time_ms"),
+                prepared.get("observability", {}).get("context_tokens"),
+                trace.get("output_tokens"),
             )
             logger.info(
                 "ceaser_stream_trace user_id=%s conversation_id=%s prepare_ms=%s context_ms=%s provider=%s model=%s fallback=%s first_token_ms=%s total_ms=%s",
