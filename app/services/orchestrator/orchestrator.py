@@ -680,6 +680,7 @@ class CeaserOrchestrator:
         captured_memories: list[dict] = []
         observability = {
             "prepare_ms": round((perf_counter() - started) * 1000, 2),
+            "stage_timings": list(request_trace.get("stage_timings", [])),
             "routing_ms": round((routing_finished - routing_started) * 1000, 2),
             "tool_calls_ms": round((tool_calls_finished - tool_calls_started) * 1000, 2),
             "retrieval_time_ms": round((retrieval_finished - retrieval_started) * 1000, 2),

@@ -88,6 +88,7 @@ def create_app() -> FastAPI:
         request_id = request.headers.get("x-request-id") or uuid4().hex
         request.state.request_id = request_id
         started = perf_counter()
+        request.state.ceaser_request_received_at = started
         timing_tokens = begin_database_timing()
         try:
             response = await call_next(request)
