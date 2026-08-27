@@ -28,6 +28,7 @@ from app.services.orchestrator.response_pipeline import ResponsePipeline
 from app.services.orchestrator.suggestion_engine import SuggestionEngine
 from app.services.project_service import ProjectService
 from app.services.orchestrator.user_context_resolver import UserContextResolver
+from app.services.execution_paths import FastChatRequest, FastChatService
 from app.services.local_bolt_dispatcher import LocalBoltDispatcher
 from app.services.image_generation import HuggingFaceImageGenerationProvider, ImageGenerationRequest, ImageGenerationService
 from app.services.huggingface_dataset_service import HuggingFaceDatasetService
@@ -68,6 +69,7 @@ class CeaserOrchestrator:
         self.workflow_orchestrator = WorkflowOrchestrator(db)
         self.response_pipeline = ResponsePipeline()
         self.suggestion_engine = SuggestionEngine()
+        self.fast_chat = FastChatService()
 
     def handle_message(
         self,
@@ -578,14 +580,14 @@ class CeaserOrchestrator:
         else:
             request_mode = "DIRECT_CHAT"
 
-        simple_chat_request = (
-            request_mode == "DIRECT_CHAT"
-            and not attached_documents
-            and not file_ids
-            and not report_request
-            and not self._requires_rich_context(message)
-            and not force_live_web_search
-        )
+        simple_chat_request = self.fast_chat.accepts(FastChatRequest(
+            route=route_decision,
+            has_attachments=bool(attached_documents),
+            has_file_ids=bool(file_ids),
+            report_requested=report_request,
+            rich_context_required=self._requires_rich_context(message),
+            live_web_requested=force_live_web_search,
+        ))
 
         # Ordinary chat does not need specialist-agent resolution. Keep this
         # branch before agent selection so registry/workflow work cannot delay
@@ -655,12 +657,19 @@ class CeaserOrchestrator:
 
         lightweight_follow_up = route_decision.route is KnowledgeRoute.FOLLOW_UP
         lightweight_normal = simple_chat_request or request_mode in {"DIRECT_CHAT", "FRESH_WEB_CHAT"}
-        knowledge_context = memory_first_context or (self._lightweight_follow_up_context(follow_up_trace) if lightweight_follow_up else self._minimal_chat_context() if lightweight_normal else self._knowledge_context(
+        fast_context = self.fast_chat.build_context(
+            route=route_decision,
+            follow_up_trace=follow_up_trace,
+            minimal_factory=self._minimal_chat_context,
+            follow_up_factory=self._lightweight_follow_up_context,
+            allow_minimal=lightweight_normal,
+        ) if lightweight_normal or lightweight_follow_up else None
+        knowledge_context = memory_first_context or fast_context or self._knowledge_context(
             user_id=user_id,
             message=effective_message,
             conversation_id=conversation.id if conversation else conversation_id,
             file_ids=file_ids or [],
-        ))
+        )
         dataset_started = perf_counter()
         dataset_result = None
         if settings.huggingface_datasets_enabled and self._should_use_dataset(message, route_decision.route):
