@@ -38,9 +38,22 @@ class KnowledgeRouter:
             return RouteDecision(KnowledgeRoute.FOLLOW_UP, "conversation continuation")
         if has_attached_files or any(term in text for term in ("this pdf", "this document", "uploaded file", "attached file")):
             return RouteDecision(KnowledgeRoute.FILE, "user file or document request")
-        if any(term in text for term in ("my calendar", "my meetings", "meetings do i have", "meetings today", "meeting today", "calendar today", "calendar tomorrow", "events today")):
+        if any(term in text for term in (
+            "my calendar", "my meetings", "meetings do i have", "meetings today",
+            "meeting today", "calendar today", "calendar tomorrow", "events today",
+            "my upcoming events", "upcoming events", "upcoming meetings",
+            "events do i have", "what's on my calendar", "what is on my calendar",
+            "next meeting", "my availability", "am i free",
+        )):
             return RouteDecision(KnowledgeRoute.CALENDAR, "personal calendar request")
-        if any(term in text for term in ("my emails", "my email", "read gmail", "read my gmail", "my drive", "google drive", "my files in drive", "notion", "my notion", "notion page", "notion pages", "notion database", "notion databases", "notion workspace", "notion docs", "notion members", "notion users", "workspace members", "workspace users", "github", "git hub", "my repos", "my repositories", "my repository", "github repos", "github repositories", "github commits", "github issues", "github pull requests", "readme", "codebase")):
+        if any(term in text for term in (
+            "my emails", "my email", "read gmail", "read my gmail", "my inbox", "unread email", "unread mail",
+            "my drive", "google drive", "my files in drive", "drive files", "drive documents",
+            "my tasks", "google tasks", "my todo", "my to-do", "pending tasks",
+            "google classroom", "classroom assignments", "my assignments", "my coursework", "my courses",
+            "notion", "my notion", "notion page", "notion pages", "notion database", "notion databases", "notion workspace", "notion docs", "notion members", "notion users", "workspace members", "workspace users",
+            "github", "git hub", "my repos", "my repositories", "my repository", "github repos", "github repositories", "github commits", "github issues", "github pull requests", "readme", "codebase",
+        )):
             return RouteDecision(KnowledgeRoute.INTEGRATION, "connected personal data request")
         if any(term in text for term in ("repositories related", "repository related", "repos related", "repo related", "repositories in my account", "repos in my account", "my account repositories", "visible repositories", "visible repos")):
             return RouteDecision(KnowledgeRoute.INTEGRATION, "connected personal data request")

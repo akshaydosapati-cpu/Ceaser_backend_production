@@ -1204,6 +1204,7 @@ class CeaserOrchestrator:
         if not self._is_explicit_google_calendar_request(normalized):
             return None
 
+        date_specific = self._is_date_specific_calendar_request(normalized)
         target_date = self._calendar_target_date(message)
         try:
             integration_manager = IntegrationManager(self.db)
@@ -1219,12 +1220,20 @@ class CeaserOrchestrator:
             return "Google Calendar is not connected yet. Connect it from Integrations, then I can read your events."
 
         events = metadata.get("items") or []
-        matched_events = self._filter_calendar_events(events, target_date)
+        matched_events = self._filter_calendar_events(events, target_date) if date_specific else events
         date_label = f"{target_date.strftime('%B')} {target_date.day}, {target_date.year}"
         if not matched_events:
-            return f"I checked your Google Calendar. You have no events on {date_label}."
+            return (
+                f"I checked your Google Calendar. You have no events on {date_label}."
+                if date_specific
+                else "I checked your Google Calendar. You have no upcoming events."
+            )
 
-        lines = [f"Here is what I found on your Google Calendar for {date_label}:"]
+        lines = [
+            f"Here is what I found on your Google Calendar for {date_label}:"
+            if date_specific
+            else "Here are your upcoming Google Calendar events:"
+        ]
         for index, event in enumerate(matched_events, start=1):
             start = self._format_calendar_time(event.get("start"))
             end = self._format_calendar_time(event.get("end"))
@@ -1256,9 +1265,9 @@ class CeaserOrchestrator:
             provider_id, label = "google-drive", "Google Drive"
         elif self._is_explicit_gmail_request(normalized):
             provider_id, label = "gmail", "Gmail"
-        elif re.search(r"\b(?:show|list|read|find|check|sync)\b.{0,40}\b(?:google tasks|my tasks|my todo|my to-do)\b", normalized):
+        elif self._is_explicit_google_tasks_request(normalized):
             provider_id, label = "google-tasks", "Google Tasks"
-        elif re.search(r"\b(?:show|list|read|find|check|sync)\b.{0,40}\b(?:google classroom|my assignments|my coursework)\b", normalized):
+        elif self._is_explicit_google_classroom_request(normalized):
             provider_id, label = "google-classroom", "Google Classroom"
         elif re.search(r"\b(?:show|list|read|find|search|check|sync|use|summarize|summary|explain|what|who)\b.{0,90}\b(?:notion|my notion|notion page|notion pages|notion database|notion databases|notion docs|notion workspace|notion members|notion users|workspace members|workspace users|workspace context|knowledge sources)\b", normalized):
             provider_id, label = "notion", "Notion"
@@ -1299,7 +1308,7 @@ class CeaserOrchestrator:
                 or item.get("course_title")
                 or "Untitled"
             )
-            detail = item.get("from") or item.get("modified_time") or item.get("due") or item.get("status") or ""
+            detail = item.get("from") or item.get("modified_time") or item.get("due") or item.get("due_date") or item.get("course") or item.get("status") or ""
             lines.append(f"{index}. {title}{f' - {detail}' if detail else ''}")
         return "\n".join(lines)
 
@@ -1870,12 +1879,19 @@ class CeaserOrchestrator:
 
     def _is_explicit_google_calendar_request(self, message: str) -> bool:
         calendar_reference = bool(re.search(r"\b(?:google calendar|my calendar|calendar|calender)\b", message))
-        calendar_action = bool(re.search(r"\b(?:check|show|list|read|find|add|create|schedule|sync|fit)\b", message))
+        calendar_action = bool(re.search(r"\b(?:check|show|list|read|find|add|create|schedule|sync|fit|upcoming|next)\b", message))
         personal_event_request = bool(re.search(
-            r"\b(?:what|which|show|list|check)\b.{0,40}\b(?:my events|my meetings|my availability|my free time)\b|\b(?:am i|are we)\s+(?:free|available)\b|\bmy availability\b",
+            r"\b(?:what|which|show|list|check)\b.{0,40}\b(?:my events|my meetings|my availability|my free time)\b|\b(?:am i|are we)\s+(?:free|available)\b|\bmy availability\b|\b(?:my\s+)?upcoming\s+(?:events|meetings)\b|\b(?:events|meetings)\s+do\s+i\s+have\b|\bnext\s+meeting\b",
             message,
         ))
         return (calendar_reference and calendar_action) or personal_event_request
+
+    def _is_date_specific_calendar_request(self, message: str) -> bool:
+        if re.search(r"\b(?:today|tomorrow)\b", message):
+            return True
+        if re.search(r"\b(?:january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\s+\d{1,2}", message):
+            return True
+        return bool(re.search(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b", message))
 
     def _is_explicit_google_drive_request(self, message: str) -> bool:
         drive_reference = bool(re.search(r"\b(?:google drive|my drive|drive (?:file|files|document|documents|folder|folders)|my files)\b", message))
@@ -1883,9 +1899,19 @@ class CeaserOrchestrator:
         return drive_reference and data_action
 
     def _is_explicit_gmail_request(self, message: str) -> bool:
-        gmail_reference = bool(re.search(r"\b(?:gmail|my inbox|my emails?|my mail)\b", message))
+        gmail_reference = bool(re.search(r"\b(?:gmail|my inbox|my emails?|my mail|my unread emails?|unread emails?)\b", message))
         data_action = bool(re.search(r"\b(?:read|find|search|show|list|check|sync)\b", message))
         return gmail_reference and data_action
+
+    def _is_explicit_google_tasks_request(self, message: str) -> bool:
+        task_reference = bool(re.search(r"\b(?:google tasks|my tasks|my todo|my to-do|pending tasks)\b", message))
+        data_action = bool(re.search(r"\b(?:what|which|show|list|read|find|check|sync|open)\b", message))
+        return task_reference and data_action
+
+    def _is_explicit_google_classroom_request(self, message: str) -> bool:
+        classroom_reference = bool(re.search(r"\b(?:google classroom|classroom assignments|my assignments|my coursework|my courses)\b", message))
+        data_action = bool(re.search(r"\b(?:what|which|show|list|read|find|check|sync|open)\b", message))
+        return classroom_reference and data_action
 
     def _maybe_identity_memory_response(self, user_id: str, message: str) -> str | None:
         normalized = message.strip()

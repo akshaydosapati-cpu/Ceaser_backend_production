@@ -20,6 +20,8 @@ from app.core.security.dependencies import get_current_user
 from app.main import create_app
 from app.models.integration import Integration
 from app.models.user import User
+from app.services.orchestrator.orchestrator import CeaserOrchestrator
+from app.services.orchestrator.knowledge_router import KnowledgeRoute, KnowledgeRouter
 
 
 engine = create_engine(
@@ -111,3 +113,34 @@ def test_metadata_endpoint_is_read_only_and_safe_when_disconnected() -> None:
     assert payload["provider"] == "notion"
     assert payload["status"] == "not_connected"
     assert payload["items"] == []
+
+
+def test_beta_integration_requests_reach_connected_data_routes() -> None:
+    router = KnowledgeRouter()
+    calendar_prompts = [
+        "Show my upcoming events",
+        "What meetings do I have?",
+        "What is on my calendar tomorrow?",
+    ]
+    integration_prompts = [
+        "Show my unread emails",
+        "List my Google Drive files",
+        "What are my Google Tasks?",
+        "Show my Classroom assignments",
+        "List my Notion pages",
+        "Show my GitHub repositories",
+    ]
+
+    for prompt in calendar_prompts:
+        decision = router.classify(message=prompt, has_attached_files=False, is_follow_up=False)
+        assert decision.route is KnowledgeRoute.CALENDAR, prompt
+    for prompt in integration_prompts:
+        decision = router.classify(message=prompt, has_attached_files=False, is_follow_up=False)
+        assert decision.route is KnowledgeRoute.INTEGRATION, prompt
+
+    orchestrator = CeaserOrchestrator.__new__(CeaserOrchestrator)
+    assert orchestrator._is_explicit_google_calendar_request("show my upcoming events")
+    assert orchestrator._is_explicit_gmail_request("show my unread emails")
+    assert orchestrator._is_explicit_google_drive_request("list my google drive files")
+    assert orchestrator._is_explicit_google_tasks_request("what are my google tasks")
+    assert orchestrator._is_explicit_google_classroom_request("show my classroom assignments")
