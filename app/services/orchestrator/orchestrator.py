@@ -48,6 +48,7 @@ from app.intelligence.orchestrator.intent_engine import intent_engine
 from app.intelligence.orchestrator.models import IntentType
 from app.intelligence.orchestrator.models import RequestContext
 from app.intelligence.orchestrator.retrieval_planner import retrieval_planner
+from app.core.database.session import database_timing
 
 
 logger = logging.getLogger(__name__)
@@ -427,17 +428,31 @@ class CeaserOrchestrator:
         parent_message_id: str | None = None,
         model_preference: str | None = None,
         force_live_web_search: bool = False,
+        conversation: Conversation | None = None,
     ) -> dict[str, Any]:
         started = perf_counter()
         request_trace: dict[str, Any] = {}
         stage_started = perf_counter()
+        stage_db_count, stage_db_ms = database_timing()
 
         def mark_stage(stage: str) -> None:
-            nonlocal stage_started
+            nonlocal stage_started, stage_db_count, stage_db_ms
             duration_ms = round((perf_counter() - stage_started) * 1000, 2)
-            request_trace.setdefault("stage_timings", []).append({"stage": stage, "duration_ms": duration_ms})
-            logger.info("ceaser_prepare_stage request_id=%s stage=%s duration_ms=%s", request_id, stage, duration_ms)
+            db_count, db_ms = database_timing()
+            query_count = max(0, db_count - stage_db_count)
+            query_ms = round(max(0.0, db_ms - stage_db_ms), 2)
+            request_trace.setdefault("stage_timings", []).append({
+                "stage": stage,
+                "duration_ms": duration_ms,
+                "db_queries": query_count,
+                "db_ms": query_ms,
+            })
+            logger.info(
+                "ceaser_prepare_stage request_id=%s stage=%s duration_ms=%s db_queries=%s db_ms=%s",
+                request_id, stage, duration_ms, query_count, query_ms,
+            )
             stage_started = perf_counter()
+            stage_db_count, stage_db_ms = db_count, db_ms
 
         logger.info("ceaser_prepare_stage request_id=%s stage=preparation_started duration_ms=0", request_id)
         attached_documents = self._attached_documents(user_id=user_id, file_ids=file_ids or [], trace=request_trace)
@@ -455,7 +470,7 @@ class CeaserOrchestrator:
                 trace=request_trace,
             )
 
-        conversation = self._get_conversation(conversation_id)
+        conversation = conversation or self._get_conversation(conversation_id)
         mark_stage("conversation_lookup")
         conversation_context = self._conversation_context(conversation)
         mark_stage("history_load")
@@ -472,22 +487,31 @@ class CeaserOrchestrator:
         )
         mark_stage("knowledge_classification")
 
-        if conversation:
+        user_message_metadata = {
+            "request_id": request_id,
+            "parent_message_id": parent_message_id,
+            "attached_files": [{"id": item["id"], "name": item["name"], "file_type": item["file_type"]} for item in attached_documents],
+            "follow_up_detected": follow_up_trace["follow_up_detected"],
+            "active_topic": follow_up_trace["active_topic"],
+            "active_subtopic": follow_up_trace.get("active_subtopic"),
+            "last_user_intent": follow_up_trace.get("follow_up_intent"),
+            "resolved_entities": follow_up_trace["resolved_entities"],
+            "context_source": follow_up_trace["context_source"],
+        }
+
+        # Direct provider responses persist the turn after the first token is
+        # forwarded. Direct local/integration results still persist here.
+        defer_user_turn = route_decision.route not in {
+            KnowledgeRoute.CALENDAR,
+            KnowledgeRoute.INTEGRATION,
+            KnowledgeRoute.MEMORY,
+        }
+        if conversation and not defer_user_turn:
             self.conversations.create_message(
                 conversation_id=conversation.id,
                 role="user",
                 content=message,
-                metadata={
-                    "request_id": request_id,
-                    "parent_message_id": parent_message_id,
-                    "attached_files": [{"id": item["id"], "name": item["name"], "file_type": item["file_type"]} for item in attached_documents],
-                    "follow_up_detected": follow_up_trace["follow_up_detected"],
-                    "active_topic": follow_up_trace["active_topic"],
-                    "active_subtopic": follow_up_trace.get("active_subtopic"),
-                    "last_user_intent": follow_up_trace.get("follow_up_intent"),
-                    "resolved_entities": follow_up_trace["resolved_entities"],
-                    "context_source": follow_up_trace["context_source"],
-                },
+                metadata=user_message_metadata,
                 ingest_knowledge=False,
             )
             if conversation.title == "New Chat":
@@ -748,6 +772,9 @@ class CeaserOrchestrator:
             "request_id": request_id,
             "parent_message_id": parent_message_id,
             "follow_up_trace": follow_up_trace,
+            "defer_user_turn": defer_user_turn,
+            "original_message": message,
+            "user_message_metadata": user_message_metadata,
             "context": {
                 "scope": {"name": "CEASER", "type": "personal_ai_os"},
                 "current_message": message,
@@ -779,16 +806,23 @@ class CeaserOrchestrator:
         conversation = prepared.get("conversation")
         if not conversation:
             return None
-        return self.conversations.create_message(
-            conversation_id=conversation.id,
-            role="assistant",
-            content="",
-            metadata={
+        assistant_metadata = {
                 "streaming": True,
                 "request_id": prepared.get("request_id"),
                 "parent_message_id": prepared.get("parent_message_id"),
-            },
-            ingest_knowledge=False,
+            }
+        if prepared.get("defer_user_turn"):
+            title = self.conversations.generate_title(prepared["original_message"]) if conversation.title == "New Chat" else None
+            return self.conversations.begin_stream_turn(
+                conversation,
+                user_content=prepared["original_message"],
+                user_metadata=prepared.get("user_message_metadata"),
+                assistant_metadata=assistant_metadata,
+                title=title,
+            )
+        return self.conversations.create_message(
+            conversation_id=conversation.id, role="assistant", content="",
+            metadata=assistant_metadata, ingest_knowledge=False,
         )
 
     def persist_stream_response(self, assistant_message: Message | None, content: str) -> None:

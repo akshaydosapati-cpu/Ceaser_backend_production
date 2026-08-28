@@ -98,7 +98,6 @@ class CreditService:
             if existing:
                 return existing
             raise
-        self.db.refresh(reservation)
         return reservation
 
     def settle(self, user_id: str, request_id: str, actual: int, *, meaningful_output: bool = True) -> CreditReservation:

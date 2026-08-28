@@ -13,7 +13,7 @@ from app.core.rate_limiter import rate_limiter
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.database.session import SessionLocal, get_db
+from app.core.database.session import SessionLocal, database_timing, get_db
 from app.core.security.dependencies import get_current_user
 from app.intelligence.ai.model_router import request_for_chat
 from app.intelligence.ai.sync import generate_text_sync, stream_text
@@ -293,11 +293,27 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             headers={"Retry-After": str(concurrency_limit.retry_after)},
         )
     credits = CreditService(db)
+    conversation = None
     try:
+        db_count_before, db_ms_before = database_timing()
+        # The reservation already requires a durable transaction. Flush a new
+        # conversation first so both records are committed in that transaction.
+        if not conversation_id:
+            conversation_started = perf_counter()
+            conversation = ConversationService(db).create_pending(user_id=user.id)
+            conversation_id = conversation.id
+            conversation_lookup_ms = round((perf_counter() - conversation_started) * 1000, 2)
+        else:
+            conversation_lookup_ms = 0.0
         reserve_started = perf_counter()
         reservation = credits.reserve(user.id, billing_id, "ai_conversation")
         credit_reservation_ms = round((perf_counter() - reserve_started) * 1000, 2)
-        logger.info("ceaser_stream_stage request_id=%s stage=credits_reserved duration_ms=%.2f", request_id, credit_reservation_ms)
+        db_count_after, db_ms_after = database_timing()
+        logger.info(
+            "ceaser_stream_stage request_id=%s stage=credits_reserved duration_ms=%.2f db_queries=%s db_ms=%.2f",
+            request_id, credit_reservation_ms,
+            max(0, db_count_after - db_count_before), max(0.0, db_ms_after - db_ms_before),
+        )
     except InsufficientCreditsError as exc:
         rate_limiter.release("chat-generation", user_id)
         raise HTTPException(status_code=402, detail="Insufficient CEASER credits.") from exc
@@ -312,13 +328,8 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
         # A new chat is created authoritatively inside the stream request. This
         # removes the frontend's blocking create-conversation round trip while
         # preserving one durable conversation and the existing ownership checks.
-        if not conversation_id:
-            conversation_started = perf_counter()
-            conversation_id = ConversationService(db).create(user_id=user.id).id
-            conversation_lookup_ms = round((perf_counter() - conversation_started) * 1000, 2)
+        if conversation is not None:
             logger.info("ceaser_stream_stage request_id=%s stage=conversation_created duration_ms=%.2f", request_id, conversation_lookup_ms)
-        else:
-            conversation_lookup_ms = 0.0
     except Exception:
         db.rollback()
         try:
@@ -371,6 +382,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                 parent_message_id=payload.parent_message_id,
                 model_preference=payload.model_preference,
                 force_live_web_search=payload.force_live_web_search,
+                conversation=conversation,
             )
             stage_marks["prepared"] = perf_counter()
             trace["prepare_stream_request_ms"] = round((stage_marks["prepared"] - prepare_started) * 1000, 2)

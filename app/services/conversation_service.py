@@ -58,6 +58,10 @@ class ConversationService:
         self.db.refresh(conversation)
         return conversation
 
+    def create_pending(self, user_id: str, title: str | None = None) -> Conversation:
+        """Create a conversation in the current transaction without committing."""
+        return self.conversations.create(user_id=user_id, title=title or "New Chat")
+
     def create_message(
         self,
         conversation_id: str,
@@ -84,6 +88,35 @@ class ConversationService:
         self.db.commit()
         self.db.refresh(message)
         return message
+
+    def begin_stream_turn(
+        self,
+        conversation: Conversation,
+        *,
+        user_content: str | None,
+        user_metadata: dict | None,
+        assistant_metadata: dict | None,
+        title: str | None = None,
+    ) -> Message:
+        """Persist a deferred user turn and streaming assistant atomically."""
+        if user_content is not None:
+            self.conversations.create_message(
+                conversation_id=conversation.id,
+                role="user",
+                content=user_content,
+                metadata=user_metadata,
+            )
+        if title:
+            self.conversations.update_title(conversation=conversation, title=title)
+        assistant = self.conversations.create_message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="",
+            metadata=assistant_metadata,
+        )
+        self.db.commit()
+        self.db.refresh(assistant)
+        return assistant
 
     def generate_title(self, message: str) -> str:
         stop_words = {"a", "an", "the", "for", "my", "me", "and", "or", "to", "in", "of"}

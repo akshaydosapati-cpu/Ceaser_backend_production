@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config.settings import settings
-from app.core.database.session import get_db
+from app.core.database.session import database_timing, get_db
 from app.core.security.supabase_auth import supabase_auth
 from app.models.user import User
 from app.models.desktop import DesktopDevice
@@ -109,12 +109,28 @@ async def get_current_user(
     repo = UserRepository(db)
     try:
         db_started = monotonic()
-        user = repo.get_or_create(email=email, user_id=user_id)
-        db.commit()
-        db.refresh(user)
+        db_count_before, db_ms_before = database_timing()
+        # Supabase has already validated the token. Existing local identities
+        # need only a read; committing and refreshing an unchanged user added
+        # two remote database round trips to every authenticated request.
+        user = repo.get(user_id) or repo.get_by_email(email)
+        if user is None:
+            user = repo.create(email=email, user_id=user_id)
+            db.commit()
+            db.refresh(user)
         auth_trace.update(mode="supabase", db_validation_ms=round((monotonic() - db_started) * 1000, 2))
+        db_count_after, db_ms_after = database_timing()
+        auth_trace.update(
+            db_queries=max(0, db_count_after - db_count_before),
+            db_query_ms=round(max(0.0, db_ms_after - db_ms_before), 2),
+        )
         auth_trace["total_ms"] = round((monotonic() - auth_started) * 1000, 2)
-        logger.info("ceaser_auth_stage stage=auth_complete mode=supabase duration_ms=%.2f", (monotonic() - auth_started) * 1000)
+        logger.info(
+            "ceaser_auth_stage stage=auth_complete mode=supabase duration_ms=%.2f db_queries=%s db_ms=%.2f",
+            (monotonic() - auth_started) * 1000,
+            auth_trace["db_queries"],
+            auth_trace["db_query_ms"],
+        )
         return user
     except (SQLAlchemyError, Exception) as exc:
         db.rollback()

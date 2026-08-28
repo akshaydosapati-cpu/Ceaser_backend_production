@@ -22,6 +22,7 @@ from app.services.orchestrator.memory_retriever import MemoryRetriever
 from app.services.orchestrator.orchestrator import CeaserOrchestrator
 from app.services.orchestrator.knowledge_router import KnowledgeRoute
 from app.services.orchestrator.user_context_resolver import UserContextResolver
+from app.services.conversation_service import ConversationService
 
 
 engine = create_engine(
@@ -81,6 +82,7 @@ def test_prepare_stream_fast_chat_skips_expensive_services(monkeypatch) -> None:
     monkeypatch.setattr(orchestrator, "_maybe_research", unexpected)
     monkeypatch.setattr(orchestrator.memory_retriever, "retrieve_relevant_memories", unexpected)
     monkeypatch.setattr(orchestrator.workflow_orchestrator, "run", unexpected)
+    monkeypatch.setattr(orchestrator, "_default_stream_agents", unexpected)
 
     prepared = orchestrator.prepare_stream_request(
         user_id=user["id"],
@@ -95,6 +97,59 @@ def test_prepare_stream_fast_chat_skips_expensive_services(monkeypatch) -> None:
     assert prepared["observability"]["rag_used"] is False
     assert prepared["observability"]["memory_used"] is False
     assert prepared["observability"]["web_used"] is False
+    assert prepared["selected_agents"] == []
+
+
+def test_new_direct_chat_reuses_conversation_and_defers_persistence(monkeypatch) -> None:
+    user = current_user_dict()
+    db = TestingSessionLocal()
+    conversation = ConversationService(db).create(user["id"])
+    orchestrator = CeaserOrchestrator(db)
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_get_conversation",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("conversation was queried again")),
+    )
+    prepared = orchestrator.prepare_stream_request(
+        user_id=user["id"],
+        message="Explain recursion in simple terms.",
+        conversation_id=conversation.id,
+        conversation=conversation,
+        request_id="reuse-new-conversation",
+    )
+
+    assert prepared["defer_user_turn"] is True
+    assert ConversationService(db).list_messages(conversation.id) == []
+
+    assistant = orchestrator.begin_stream_response(prepared)
+    messages = ConversationService(db).list_messages(conversation.id)
+    db.close()
+
+    assert assistant is not None
+    assert [item.role for item in messages] == ["user", "assistant"]
+    assert messages[0].content == "Explain recursion in simple terms."
+
+
+def test_existing_follow_up_keeps_history_and_defers_current_turn() -> None:
+    user = current_user_dict()
+    db = TestingSessionLocal()
+    service = ConversationService(db)
+    conversation = service.create(user["id"])
+    service.create_message(conversation.id, "user", "Explain recursion.", ingest_knowledge=False)
+    service.create_message(conversation.id, "assistant", "Recursion is when a function calls itself.", ingest_knowledge=False)
+
+    prepared = CeaserOrchestrator(db).prepare_stream_request(
+        user_id=user["id"],
+        message="summarize",
+        conversation_id=conversation.id,
+        request_id="follow-up-continuity",
+    )
+    db.close()
+
+    assert prepared["defer_user_turn"] is True
+    assert prepared["follow_up_trace"]["follow_up_detected"] is True
+    assert len(prepared["conversation_context"]["messages"]) == 2
 
 
 def test_user_context_resolver_loads_enabled_agents() -> None:
