@@ -32,8 +32,8 @@ class ConversationService:
         self.db.refresh(conversation)
         return conversation
 
-    def update(self, conversation: Conversation, title: str | None = None, pinned: bool | None = None, archived: bool | None = None) -> Conversation:
-        conversation = self.conversations.update(conversation=conversation, title=title, pinned=pinned, archived=archived)
+    def update(self, conversation: Conversation, title: str | None = None, pinned: bool | None = None, archived: bool | None = None, project_id: str | None = None, update_project: bool = False) -> Conversation:
+        conversation = self.conversations.update(conversation=conversation, title=title, pinned=pinned, archived=archived, project_id=project_id, update_project=update_project)
         self.db.commit()
         self.db.refresh(conversation)
         return conversation
