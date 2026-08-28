@@ -69,7 +69,22 @@ class GeminiFallbackProvider(LLMProvider):
         max_output_tokens: int | None = None,
         trace: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
-        yield await self.generate(instructions=instructions, input_text=input_text, model=model, max_output_tokens=max_output_tokens)
+        prompt = self._prompt(instructions=instructions, input_text=input_text)
+        data = await self._post(
+            prompt=prompt,
+            model=model or settings.gemini_model,
+            temperature=settings.gemini_temperature,
+            max_tokens=max_output_tokens or settings.gemini_max_tokens,
+        )
+        finish_reason = str(((data.get("candidates") or [{}])[0]).get("finishReason") or "").upper()
+        if trace is not None:
+            trace["finish_reason"] = {
+                "MAX_TOKENS": "length",
+                "STOP": "stop",
+            }.get(finish_reason, finish_reason.lower() or None)
+        text = self._extract_text(data)
+        if text:
+            yield text
 
     async def _post(self, *, prompt: str, model: str, temperature: float, max_tokens: int) -> dict[str, Any]:
         if not settings.gemini_api_key:

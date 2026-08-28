@@ -13,6 +13,7 @@ from app.services.llm.provider import LLMProvider
 
 class ResponsePipeline:
     MAX_CODE_CONTINUATIONS = 2
+    MAX_CHAT_CONTINUATIONS = 2
 
     def __init__(self, provider: LLMProvider | None = None):
         self.provider = provider
@@ -42,7 +43,8 @@ class ResponsePipeline:
         async for chunk in stream_text(instructions=instructions, input_text=context_text, max_output_tokens=output_budget, trace=trace, model_request=model_request):
             emitted.append(chunk)
             yield chunk
-        if trace is not None and emitted and self._is_code_request(message, context):
+        is_code_request = self._is_code_request(message, context)
+        if trace is not None and emitted and is_code_request:
             continuation_count = 0
             artifact_type = self._artifact_type(message)
             structural_complete = self._artifact_is_complete("".join(emitted), artifact_type)
@@ -103,6 +105,42 @@ class ResponsePipeline:
                 closing_fence = "\n```"
                 emitted.append(closing_fence)
                 yield closing_fence
+        elif trace is not None and emitted:
+            continuation_count = 0
+            length_limit_detected = trace.get("finish_reason") in {"length", "max_tokens", "token_limit"}
+            while length_limit_detected and continuation_count < self.MAX_CHAT_CONTINUATIONS:
+                continuation_count += 1
+                continuation_trace: dict[str, Any] = {}
+                partial = "".join(emitted)
+                continuation_input = (
+                    f"Original user request:\n{message}\n\n"
+                    f"Tail of the answer already shown to the user:\n{partial[-8000:]}\n\n"
+                    "Continue exactly where the answer stopped. Do not repeat earlier text, headings, or list items. "
+                    "Preserve the same format and finish the complete answer. Output only the continuation."
+                )
+                segment_emitted = False
+                async for chunk in stream_text(
+                    instructions=instructions,
+                    input_text=continuation_input,
+                    max_output_tokens=output_budget,
+                    trace=continuation_trace,
+                    model_request=model_request,
+                ):
+                    if chunk:
+                        segment_emitted = True
+                        emitted.append(chunk)
+                        yield chunk
+                trace["finish_reason"] = continuation_trace.get("finish_reason")
+                trace["continuation_used"] = True
+                trace["continuation_count"] = continuation_count
+                trace["continuation_finish_reason"] = continuation_trace.get("finish_reason")
+                trace["continuation_reason"] = "LENGTH_LIMIT"
+                length_limit_detected = trace.get("finish_reason") in {"length", "max_tokens", "token_limit"}
+                trace["length_limit_detected"] = length_limit_detected
+                if not segment_emitted:
+                    break
+            if length_limit_detected:
+                trace["continuation_limit_reached"] = True
 
     @staticmethod
     def _is_code_request(message: str, context: dict) -> bool:
