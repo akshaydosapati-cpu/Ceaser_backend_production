@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy.orm import Session
 from app.models.mixins import utc_now
 
@@ -119,7 +121,23 @@ class ConversationService:
         return assistant
 
     def generate_title(self, message: str) -> str:
-        stop_words = {"a", "an", "the", "for", "my", "me", "and", "or", "to", "in", "of"}
-        words = [word.strip(".,!?").title() for word in message.split() if word.lower().strip(".,!?") not in stop_words]
-        title = " ".join(words[:4]).strip()
-        return title or "New Chat"
+        text = re.sub(r"\s+", " ", message).strip(" .!?\n\t")
+        text = re.sub(
+            r"^(?:(?:hey|hi)\s+ceaser[, ]+)?(?:(?:please|can you|could you|would you)\s+)?"
+            r"(?:help me\s+)?(?:tell me about|tell me|explain|describe|check|show|give me|write|create|build|generate|make)\s+",
+            "",
+            text,
+            flags=re.I,
+        )
+        text = re.sub(r"\b(?:and\s+)?(?:show|list|give me|tell me)\b", " ", text, flags=re.I)
+        text = re.split(r"[.!?\n]", text, maxsplit=1)[0]
+        text = re.sub(r"\b(?:using|with)\s+(?:html|css|javascript|typescript|python)(?:\s*(?:,|and|/|\+)\s*(?:html|css|javascript|typescript|python))*\b.*$", "", text, flags=re.I)
+        words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#.'-]*", text)
+        filler = {"a", "an", "the", "my", "me", "some", "about", "for", "to", "in", "of", "that", "this", "and"}
+        words = [word for word in words if word.lower() not in filler]
+        if not words:
+            return "New Chat"
+        title = " ".join(words[:6])
+        acronyms = {"ai", "api", "css", "html", "js", "llm", "seo", "sql", "ui", "ux"}
+        title = " ".join(word.upper() if word.lower() in acronyms else word.capitalize() for word in title.split())
+        return title[:72].strip() or "New Chat"
