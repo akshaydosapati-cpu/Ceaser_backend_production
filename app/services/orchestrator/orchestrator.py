@@ -1291,8 +1291,11 @@ class CeaserOrchestrator:
             end = "" if all_day else self._format_calendar_time(event.get("end"))
             title = event.get("title") or "Untitled event"
             location = f" - {event.get('location')}" if event.get("location") else ""
+            calendar_source = ""
+            if event.get("calendar_name") and not event.get("calendar_primary"):
+                calendar_source = f" ({event.get('calendar_name')})"
             time_range = f"{start} - {end}" if end and end != start else start
-            lines.append(f"- **{time_range}** - {title}{location}")
+            lines.append(f"- **{time_range}** - {title}{calendar_source}{location}")
         return "\n".join(lines)
 
     def _maybe_integration_response(self, user_id: str, message: str) -> str | None:
@@ -1451,6 +1454,19 @@ class CeaserOrchestrator:
 
         if result.capability == "notion.list_tasks":
             return self._format_notion_task_tool_result(data)
+
+        if result.capability == "notion.list_members":
+            members = data.get("members") or []
+            if not members:
+                return "I checked Notion, but no workspace members are visible to the CEASER integration."
+            lines = ["Notion workspace members visible to CEASER:"]
+            for index, member in enumerate(members[:25], start=1):
+                name = member.get("name") or "Unnamed user"
+                email = member.get("email")
+                member_type = member.get("type")
+                details = [value for value in (email, member_type) if value]
+                lines.append(f"{index}. {name}" + (f" - {' - '.join(details)}" if details else ""))
+            return "\n".join(lines)
 
         if result.capability == "notion.create_task":
             task = data.get("task") or {}

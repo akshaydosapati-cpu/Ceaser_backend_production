@@ -21,6 +21,8 @@ from app.main import create_app
 from app.models.integration import Integration
 from app.models.user import User
 from app.services.integrations.integration_manager import IntegrationManager
+from app.services.integrations.integration_intent_resolver import IntegrationIntentResolver
+from app.services.integrations.notion_provider import NotionProvider
 from app.services.orchestrator.orchestrator import CeaserOrchestrator
 from app.services.orchestrator.knowledge_router import KnowledgeRoute, KnowledgeRouter
 
@@ -170,3 +172,22 @@ def test_upcoming_calendar_events_are_grouped_by_date_and_preserve_all_day(monke
     assert response.count("Happy birthday!") == 1
     assert "**All day** - Happy birthday!" in response
     assert "**10:00 AM - 11:00 AM** - Project review" in response
+
+
+def test_notion_member_request_uses_members_capability() -> None:
+    intent = IntegrationIntentResolver().resolve("Check Notion and give me the members list")
+
+    assert intent is not None
+    assert intent.provider == "notion"
+    assert intent.capability == "notion.list_members"
+
+
+def test_notion_task_database_detection_uses_schema_not_only_title() -> None:
+    provider = NotionProvider()
+
+    assert provider._is_task_database(
+        {"object": "database", "title": "Team Board", "properties": ["Name", "Assignee", "Status", "Due date"]}
+    )
+    assert not provider._is_task_database(
+        {"object": "database", "title": "Knowledge Base", "properties": ["Name", "Category", "Notes"]}
+    )
