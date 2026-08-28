@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 import logging
 import uuid
 from typing import Annotated, Literal
@@ -7,7 +8,7 @@ import json
 from collections.abc import AsyncIterator
 from time import perf_counter
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from app.core.rate_limiter import rate_limiter
 from pydantic import BaseModel, Field
@@ -28,6 +29,7 @@ from app.services.credit_service import CreditService, InsufficientCreditsError
 
 router = APIRouter(prefix="/ceaser", tags=["ceaser"])
 logger = logging.getLogger(__name__)
+_autocomplete_client = httpx.AsyncClient(timeout=httpx.Timeout(2.5, connect=1.0))
 
 
 class CeaserDemoTurn(BaseModel):
@@ -44,6 +46,26 @@ class CeaserDemoResponse(BaseModel):
     response: str
     source: str = "live_backend"
     continuation_count: int = 0
+
+
+@router.get("/chat/autocomplete")
+async def ceaser_chat_autocomplete(
+    _: Annotated[User, Depends(get_current_user)],
+    query: str = Query(min_length=2, max_length=200),
+):
+    """Return live query completions without invoking the chat pipeline."""
+    try:
+        response = await _autocomplete_client.get(
+            "https://suggestqueries.google.com/complete/search",
+            params={"client": "firefox", "q": query, "hl": "en"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        suggestions = payload[1] if isinstance(payload, list) and len(payload) > 1 and isinstance(payload[1], list) else []
+        return {"suggestions": [str(item).strip() for item in suggestions if str(item).strip()][:5]}
+    except (httpx.HTTPError, ValueError, TypeError):
+        logger.info("chat_autocomplete_unavailable query_chars=%s", len(query))
+        return {"suggestions": []}
 
 
 @router.post("/demo", response_model=CeaserDemoResponse)
