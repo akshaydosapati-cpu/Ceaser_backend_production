@@ -115,9 +115,7 @@ async def notion_webhook(
 
     verification_token = payload.get("verification_token") if isinstance(payload, dict) else None
     if verification_token:
-        # TEMPORARY: remove immediately after the production Notion webhook is
-        # verified and NOTION_WEBHOOK_VERIFICATION_TOKEN is configured.
-        logger.warning("TEMPORARY Notion webhook verification_token=%s", verification_token)
+        logger.info("Notion webhook verification token received")
         return {"received": True, "verification_token": verification_token}
 
     configured_token = settings.notion_webhook_verification_token
