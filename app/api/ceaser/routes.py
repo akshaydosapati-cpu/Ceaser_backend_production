@@ -351,6 +351,11 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
         return f"event: {event_type}\ndata: {payload_text}\n\n"
 
     async def stream() -> AsyncIterator[str]:
+        # FastAPI releases request-scoped dependencies once the streaming
+        # response starts. Keep all ORM work inside a session owned by the SSE
+        # generator so models cannot become detached mid-stream.
+        stream_db = SessionLocal()
+        stream_credits = CreditService(stream_db)
         started = request_received
         stage_marks: dict[str, float] = {"start": started}
         trace: dict[str, object] = {
@@ -367,7 +372,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
         completed_meaningfully = False
         try:
             yield event("response.started", {"id": request_id, "status": "streaming", "conversation_id": conversation_id})
-            orchestrator = CeaserOrchestrator(db)
+            orchestrator = CeaserOrchestrator(stream_db)
             trace["agent_started_ms"] = round((perf_counter() - started) * 1000, 2)
             logger.info("ceaser_latency request_id=%s agent_started_ms=%s", request_id, trace["agent_started_ms"])
             logger.info("ceaser_stream_stage request_id=%s stage=retrieval_started", request_id)
@@ -382,7 +387,6 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                 parent_message_id=payload.parent_message_id,
                 model_preference=payload.model_preference,
                 force_live_web_search=payload.force_live_web_search,
-                conversation=conversation,
             )
             stage_marks["prepared"] = perf_counter()
             trace["prepare_stream_request_ms"] = round((stage_marks["prepared"] - prepare_started) * 1000, 2)
@@ -564,7 +568,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                 trace.get("provider_generation_ms"),
                 trace.get("output_tokens"),
             )
-            AuditService(db).record(
+            AuditService(stream_db).record(
                 user_id=user_id,
                 action="message_created",
                 resource_type="conversation",
@@ -581,24 +585,25 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             yield event("response.failed", {"id": request_id, "status": "failed", "error": {"category": "validation", "message": str(exc), "retryable": False}})
             yield event("error", {"message": str(exc)})
         except Exception:
-            db.rollback()
+            stream_db.rollback()
             logger.exception("ceaser_chat_stream_failed user_id=%s conversation_id=%s", user_id, conversation_id)
             yield event("response.failed", {"id": request_id, "status": "failed", "error": {"category": "internal", "message": "We couldn't complete your request. Please try again.", "retryable": True}})
             yield event("error", {"message": "We couldn't complete your request. Please try again."})
         finally:
             try:
                 if completed_meaningfully:
-                    credits.settle(user_id, billing_id, reservation_estimated_credits, meaningful_output=True)
+                    stream_credits.settle(user_id, billing_id, reservation_estimated_credits, meaningful_output=True)
                 else:
-                    db.rollback()
-                    credits.release(user_id, billing_id)
+                    stream_db.rollback()
+                    stream_credits.release(user_id, billing_id)
             except Exception:
                 # Tokens may already be visible. Keep the user response intact
                 # while recording the accounting failure for repair/audit.
-                db.rollback()
+                stream_db.rollback()
                 logger.exception("ceaser_stream_settlement_failed user_id=%s billing_id=%s", user_id, billing_id)
             finally:
                 rate_limiter.release("chat-generation", user_id)
+                stream_db.close()
 
     # Keep SSE events flowing through hosting proxies as they are produced.
     # Without no-transform / X-Accel-Buffering, a proxy can hold small token
