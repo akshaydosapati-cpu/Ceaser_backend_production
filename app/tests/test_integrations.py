@@ -20,6 +20,7 @@ from app.core.security.dependencies import get_current_user
 from app.main import create_app
 from app.models.integration import Integration
 from app.models.user import User
+from app.services.integrations.integration_manager import IntegrationManager
 from app.services.orchestrator.orchestrator import CeaserOrchestrator
 from app.services.orchestrator.knowledge_router import KnowledgeRoute, KnowledgeRouter
 
@@ -144,3 +145,28 @@ def test_beta_integration_requests_reach_connected_data_routes() -> None:
     assert orchestrator._is_explicit_google_drive_request("list my google drive files")
     assert orchestrator._is_explicit_google_tasks_request("what are my google tasks")
     assert orchestrator._is_explicit_google_classroom_request("show my classroom assignments")
+
+
+def test_upcoming_calendar_events_are_grouped_by_date_and_preserve_all_day(monkeypatch) -> None:
+    orchestrator = CeaserOrchestrator(TestingSessionLocal())
+    metadata = {
+        "status": "connected",
+        "items": [
+            {"id": "one", "title": "Happy birthday!", "start": "2026-08-29", "end": "2026-08-30", "all_day": True},
+            {"id": "duplicate", "title": "Happy birthday!", "start": "2026-08-29", "end": "2026-08-30", "all_day": True},
+            {"id": "two", "title": "Project review", "start": "2026-08-30T10:00:00+05:30", "end": "2026-08-30T11:00:00+05:30"},
+        ],
+    }
+
+    monkeypatch.setattr(IntegrationManager, "sync", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(IntegrationManager, "metadata", lambda *_args, **_kwargs: metadata)
+
+    response = orchestrator._maybe_calendar_response("user-1", "Check Google Calendar and show upcoming events")
+    orchestrator.db.close()
+
+    assert response is not None
+    assert "**Saturday, August 29, 2026**" in response
+    assert "**Sunday, August 30, 2026**" in response
+    assert response.count("Happy birthday!") == 1
+    assert "**All day** - Happy birthday!" in response
+    assert "**10:00 AM - 11:00 AM** - Project review" in response

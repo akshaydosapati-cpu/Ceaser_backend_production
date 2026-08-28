@@ -1266,15 +1266,33 @@ class CeaserOrchestrator:
         lines = [
             f"Here is what I found on your Google Calendar for {date_label}:"
             if date_specific
-            else "Here are your upcoming Google Calendar events:"
+            else "Here are your upcoming Google Calendar events, grouped by date:"
         ]
-        for index, event in enumerate(matched_events, start=1):
-            start = self._format_calendar_time(event.get("start"))
-            end = self._format_calendar_time(event.get("end"))
+        seen: set[tuple[str, str, str, str]] = set()
+        current_date: date | None = None
+        for event in matched_events:
+            event_date = self._calendar_event_date(event.get("start"))
+            identity = (
+                str(event_date or ""),
+                str(event.get("start") or ""),
+                str(event.get("title") or ""),
+                str(event.get("location") or ""),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+
+            if not date_specific and event_date != current_date:
+                current_date = event_date
+                lines.extend(["", f"**{self._format_calendar_date(event_date)}**"])
+
+            all_day = bool(event.get("all_day")) or self._is_date_only_calendar_value(event.get("start"))
+            start = "All day" if all_day else self._format_calendar_time(event.get("start"))
+            end = "" if all_day else self._format_calendar_time(event.get("end"))
             title = event.get("title") or "Untitled event"
             location = f" - {event.get('location')}" if event.get("location") else ""
             time_range = f"{start} - {end}" if end and end != start else start
-            lines.append(f"{index}. {time_range}: {title}{location}")
+            lines.append(f"- **{time_range}** - {title}{location}")
         return "\n".join(lines)
 
     def _maybe_integration_response(self, user_id: str, message: str) -> str | None:
@@ -2073,19 +2091,29 @@ class CeaserOrchestrator:
     def _filter_calendar_events(self, events: list[dict], target_date: date) -> list[dict]:
         matched = []
         for event in events:
-            raw_start = event.get("start")
-            if not raw_start:
-                continue
-            try:
-                event_date = datetime.fromisoformat(raw_start.replace("Z", "+00:00")).date()
-            except ValueError:
-                try:
-                    event_date = date.fromisoformat(raw_start[:10])
-                except ValueError:
-                    continue
+            event_date = self._calendar_event_date(event.get("start"))
             if event_date == target_date:
                 matched.append(event)
         return matched
+
+    def _calendar_event_date(self, value: str | None) -> date | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return date.fromisoformat(value[:10])
+            except ValueError:
+                return None
+
+    def _format_calendar_date(self, value: date | None) -> str:
+        if value is None:
+            return "Date unavailable"
+        return f"{value.strftime('%A, %B')} {value.day}, {value.year}"
+
+    def _is_date_only_calendar_value(self, value: str | None) -> bool:
+        return bool(value and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value))
 
     def _format_calendar_time(self, value: str | None) -> str:
         if not value:

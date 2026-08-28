@@ -41,6 +41,7 @@ class GoogleCalendarProvider(BaseIntegrationProvider):
                 "title": item.get("summary", "Untitled event"),
                 "start": item.get("start", {}).get("dateTime") or item.get("start", {}).get("date"),
                 "end": item.get("end", {}).get("dateTime") or item.get("end", {}).get("date"),
+                "all_day": bool(item.get("start", {}).get("date")),
                 "location": item.get("location"),
                 "link": item.get("htmlLink"),
             }
