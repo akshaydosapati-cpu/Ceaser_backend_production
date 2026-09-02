@@ -14,11 +14,22 @@ from app.intelligence.ai.model_router import ModelRequest, request_for_chat
 logger = logging.getLogger(__name__)
 
 
-def generate_text_sync(*, instructions: str, input_text: str, temperature: float | None = None, max_output_tokens: int | None = None, model_request: ModelRequest | None = None) -> str:
+def generate_text_sync(
+    *,
+    instructions: str,
+    input_text: str,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
+    model_request: ModelRequest | None = None,
+    attempt_timeout_seconds: float | None = None,
+    overall_timeout_seconds: float | None = None,
+    trace: dict[str, Any] | None = None,
+) -> str:
     from app.intelligence.ai.ai_provider_service import ai_provider_service
 
     async def _generate() -> str:
         last_error: Exception | None = None
+        request_started = perf_counter()
         request = model_request or request_for_chat(context_size_estimate=max(1, len(input_text) // 4))
         attempts = ai_provider_service.llm.model_candidates(request, max_count=max(1, settings.llm_max_fallbacks + 1))
         if not attempts:
@@ -26,21 +37,55 @@ def generate_text_sync(*, instructions: str, input_text: str, temperature: float
         for index, (selection, provider) in enumerate(attempts):
             provider_name = selection.model.provider_id
             started = perf_counter()
+            timeout_seconds = attempt_timeout_seconds
+            if overall_timeout_seconds is not None:
+                remaining_seconds = overall_timeout_seconds - (perf_counter() - request_started)
+                if remaining_seconds <= 0:
+                    break
+                timeout_seconds = min(timeout_seconds, remaining_seconds) if timeout_seconds is not None else remaining_seconds
+            if trace is not None:
+                trace.update(
+                    {
+                        "provider": provider_name,
+                        "model": selection.model.model_id,
+                        "fallback_used": index > 0,
+                        "provider_attempt": index + 1,
+                    }
+                )
             try:
-                text = await provider.generate(
+                generate = provider.generate(
                     instructions=instructions,
                     input_text=input_text,
                     model=selection.model.provider_model_name,
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
                 )
+                text = await asyncio.wait_for(generate, timeout=timeout_seconds) if timeout_seconds is not None else await generate
                 ai_provider_service.llm.router.record_success(
                     provider_name,
                     model_id=selection.model.model_id,
                     total_ms=(perf_counter() - started) * 1000,
                 )
+                if trace is not None:
+                    trace["provider_generation_ms"] = round((perf_counter() - started) * 1000, 2)
                 logger.info("AI provider succeeded: provider=%s total_ms=%s", provider_name, round((perf_counter() - started) * 1000))
                 return text
+            except asyncio.TimeoutError:
+                timeout_error = AIServiceUnavailableError(
+                    "Provider response exceeded the configured request budget.",
+                    retryable=True,
+                    provider=provider_name,
+                    category="timeout",
+                )
+                last_error = timeout_error
+                ai_provider_service.llm.router.record_failure(provider_name, timeout_error, model_id=selection.model.model_id)
+                if trace is not None:
+                    trace.setdefault("failed_attempts", []).append(
+                        {"provider": provider_name, "category": "timeout", "detail": timeout_error.detail}
+                    )
+                logger.warning("AI provider timed out: provider=%s timeout_seconds=%s", provider_name, timeout_seconds)
+                if index >= len(attempts) - 1:
+                    break
             except AIServiceUnavailableError as exc:
                 last_error = exc
                 ai_provider_service.llm.router.record_failure(provider_name, exc, model_id=selection.model.model_id)

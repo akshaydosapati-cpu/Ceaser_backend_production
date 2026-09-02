@@ -18,6 +18,7 @@ from app.core.database.session import SessionLocal, database_timing, get_db
 from app.core.security.dependencies import get_current_user
 from app.intelligence.ai.model_router import request_for_chat
 from app.intelligence.ai.sync import generate_text_sync, stream_text
+from app.intelligence.ai.errors import AIServiceUnavailableError
 from app.models.user import User
 from app.schemas.ceaser import CeaserChatRequest, CeaserChatResponse
 from app.services.audit_service import AuditService
@@ -154,6 +155,14 @@ def ceaser_chat(payload: CeaserChatRequest, user: Annotated[User, Depends(get_cu
         db.rollback()
         credits.release(user_id, billing_id)
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AIServiceUnavailableError as exc:
+        db.rollback()
+        credits.release(user_id, billing_id)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "ai_capacity_busy", "message": "CEASER is handling unusually high AI demand. Please try again in a moment."},
+            headers={"Retry-After": "5"},
+        ) from exc
     except Exception:
         db.rollback()
         credits.release(user_id, billing_id)
@@ -186,11 +195,16 @@ def _maybe_desktop_fast_response(payload: CeaserChatRequest) -> dict | None:
         "Do not mention backend, providers, sources, or implementation. "
         "Maximum 180 words."
     )
+    trace: dict[str, object] = {}
     response = generate_text_sync(
         instructions=instructions,
         input_text=message,
         temperature=0.35,
-        max_output_tokens=360,
+        max_output_tokens=300,
+        model_request=request_for_chat(context_size_estimate=max(1, len(message) // 4)),
+        attempt_timeout_seconds=5.0,
+        overall_timeout_seconds=12.0,
+        trace=trace,
     ).strip()
     elapsed_ms = round((perf_counter() - started) * 1000, 2)
     logger.info(
@@ -215,6 +229,10 @@ def _maybe_desktop_fast_response(payload: CeaserChatRequest) -> dict | None:
             "retrieval_time_ms": 0,
             "context_build_ms": 0,
             "backend_fast_path_ms": elapsed_ms,
+            "provider": trace.get("provider"),
+            "model": trace.get("model"),
+            "fallback_used": bool(trace.get("fallback_used")),
+            "provider_first_token_ms": trace.get("first_token_ms"),
             "cache_hit": True,
         },
         "suggestions": [],

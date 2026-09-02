@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from app.core.config.settings import Settings, settings
 from app.intelligence.ai.ai_provider_service import ai_provider_service
 from app.intelligence.ai.errors import AIServiceUnavailableError, allows_provider_fallback
-from app.intelligence.ai.sync import stream_text
+from app.intelligence.ai.sync import generate_text_sync, stream_text
 
 
 class FailingStreamProvider:
@@ -23,6 +23,17 @@ class FailingStreamProvider:
 class SuccessfulStreamProvider:
     async def stream(self, **_kwargs):
         yield "fallback response"
+
+
+class SlowGenerateProvider:
+    async def generate(self, **_kwargs):
+        await asyncio.sleep(0.05)
+        return "too late"
+
+
+class SuccessfulGenerateProvider:
+    async def generate(self, **_kwargs):
+        return "fallback response"
 
 
 def selection(provider: str, model_id: str):
@@ -64,6 +75,31 @@ def test_only_safe_provider_failures_allow_fallback():
 
     assert allows_provider_fallback(unavailable) is True
     assert allows_provider_fallback(authentication) is False
+
+
+def test_sync_generation_uses_bounded_timeout_then_falls_back(monkeypatch):
+    attempts = [
+        (selection("groq", "groq-primary"), SlowGenerateProvider()),
+        (selection("openai", "openai-primary"), SuccessfulGenerateProvider()),
+    ]
+    monkeypatch.setattr(settings, "llm_max_fallbacks", 1)
+    monkeypatch.setattr(ai_provider_service.llm, "model_candidates", lambda *_args, **_kwargs: attempts)
+    monkeypatch.setattr(ai_provider_service.llm.router, "record_failure", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ai_provider_service.llm.router, "record_success", lambda *_args, **_kwargs: None)
+
+    trace = {}
+    text = generate_text_sync(
+        instructions="safe",
+        input_text="hello",
+        attempt_timeout_seconds=0.01,
+        overall_timeout_seconds=0.1,
+        trace=trace,
+    )
+
+    assert text == "fallback response"
+    assert trace["provider"] == "openai"
+    assert trace["fallback_used"] is True
+    assert trace["failed_attempts"][0]["category"] == "timeout"
 
 
 def test_retired_groq_model_is_migrated_without_overriding_current_models():

@@ -10,6 +10,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app.api.auth.routes import router as auth_router
 from app.api.admin.routes import router as admin_router
@@ -140,6 +141,16 @@ def create_app() -> FastAPI:
     @app.exception_handler(AIServiceUnavailableError)
     async def ai_service_unavailable_handler(request: Request, exc: AIServiceUnavailableError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": exc.public_message})
+
+    @app.exception_handler(SQLAlchemyTimeoutError)
+    async def database_pool_timeout_handler(request: Request, exc: SQLAlchemyTimeoutError) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", None)
+        logger.warning("database_pool_timeout path=%s request_id=%s", request.url.path, request_id)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "CEASER is temporarily busy. Please try again in a moment."},
+            headers={"X-Request-Id": request_id or "", "Retry-After": "5"},
+        )
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

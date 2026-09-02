@@ -16,6 +16,13 @@ if _is_sqlite:
     _engine_options["connect_args"] = {"check_same_thread": False}
     if settings.database_url.rstrip("/") == "sqlite:":
         _engine_options["poolclass"] = StaticPool
+else:
+    _engine_options.update(
+        pool_size=max(1, settings.database_pool_size),
+        max_overflow=max(0, settings.database_max_overflow),
+        pool_timeout=max(0.1, settings.database_pool_timeout_seconds),
+        pool_recycle=max(1, settings.database_pool_recycle_seconds),
+    )
 
 engine = create_engine(settings.database_url, **_engine_options)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
