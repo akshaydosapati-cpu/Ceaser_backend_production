@@ -155,6 +155,26 @@ def test_stable_factual_question_uses_direct_chat() -> None:
     assert decision.route is KnowledgeRoute.GENERAL
 
 
+def test_freshness_signal_overrides_follow_up_route() -> None:
+    decision = KnowledgeRouter().classify(
+        message="What is the latest AI news today?",
+        has_attached_files=False,
+        is_follow_up=True,
+    )
+
+    assert decision.route is KnowledgeRoute.RESEARCH
+
+
+def test_stable_follow_up_remains_conversation_route() -> None:
+    decision = KnowledgeRouter().classify(
+        message="Explain that in simpler words.",
+        has_attached_files=False,
+        is_follow_up=True,
+    )
+
+    assert decision.route is KnowledgeRoute.FOLLOW_UP
+
+
 def test_serper_search_returns_ranked_results_and_images(monkeypatch) -> None:
     class Response:
         def __init__(self, payload: dict):

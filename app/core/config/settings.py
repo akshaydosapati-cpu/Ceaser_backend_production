@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     dev_auth_bypass: bool = Field(default=False, alias="DEV_AUTH_BYPASS")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
-    # OpenAI is CEASER's primary generation provider. The ordered list is used
-    # by every production generation path; later providers are failover only.
-    llm_provider_order_raw: str = Field(default="nvidia,huggingface,openai,groq,gemini", alias="LLM_PROVIDER_ORDER")
+    # Provider order is a health-aware preference hint. Capability constraints
+    # still keep coding and specialist workloads on their eligible pools.
+    llm_provider_order_raw: str = Field(default="gemini,huggingface,nvidia,openai,groq", alias="LLM_PROVIDER_ORDER")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     nvidia_api_key: str | None = Field(default=None, alias="NVIDIA_API_KEY")
     nvidia_base_url: str = Field(default="https://integrate.api.nvidia.com/v1", alias="NVIDIA_BASE_URL")

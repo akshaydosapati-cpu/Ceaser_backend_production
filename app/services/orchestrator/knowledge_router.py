@@ -34,8 +34,6 @@ class KnowledgeRouter:
 
     def classify(self, *, message: str, has_attached_files: bool, is_follow_up: bool) -> RouteDecision:
         text = message.lower().strip()
-        if is_follow_up and not has_attached_files:
-            return RouteDecision(KnowledgeRoute.FOLLOW_UP, "conversation continuation")
         if has_attached_files or any(term in text for term in ("this pdf", "this document", "uploaded file", "attached file")):
             return RouteDecision(KnowledgeRoute.FILE, "user file or document request")
         if any(term in text for term in (
@@ -63,10 +61,12 @@ class KnowledgeRouter:
             return RouteDecision(KnowledgeRoute.INTEGRATION, "connected task creation request")
         if "project" in text and any(term in text for term in ("member", "members", "team", "collaborator", "collaborators", "who is working", "who are working")):
             return RouteDecision(KnowledgeRoute.MEMORY, "project membership request")
-        if any(term in text for term in ("remember", "what do you know about me", "my preferences", "saved memory", "my memory", "my name is", "call me ", "i mentioned months ago", "i told you months ago", "years ago", "startup idea i mentioned")):
+        if any(term in text for term in ("remember", "what do you know about me", "my preferences", "saved memory", "my memory", "my name is", "call me ", "i mentioned months ago", "i told you months ago", "years ago", "startup idea i mentioned", "where do i keep", "where is my", "what were we discussing")):
             return RouteDecision(KnowledgeRoute.MEMORY, "personal memory request")
         if any(term in text for term in ("latest", "current", "today", "yesterday", "news", "live update", "recent", "this week", "this month", "this year", "stock price", "weather", "who won", "score", "stats", "statistics", "centuries", "records", "web search", "search the web", "look up online", "internet", "sources", "citations", "competitor", "market research")):
             return RouteDecision(KnowledgeRoute.RESEARCH, "fresh information request")
         if any(text.startswith(prefix) for prefix in ("open ", "launch ", "start ", "create folder ", "take screenshot", "read clipboard")):
             return RouteDecision(KnowledgeRoute.DESKTOP, "desktop command")
+        if is_follow_up and not has_attached_files:
+            return RouteDecision(KnowledgeRoute.FOLLOW_UP, "conversation continuation")
         return RouteDecision(KnowledgeRoute.GENERAL, "stable general knowledge")
