@@ -6,6 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.admin.routes import require_admin_user
@@ -61,6 +62,9 @@ def list_records(user: Annotated[User, Depends(require_admin_user)], db: Annotat
 def create_record(payload: InternshipCreate, user: Annotated[User, Depends(require_admin_user)], db: Annotated[Session, Depends(get_db)]) -> dict:
     try:
         return serialize(InternshipAdminService(db, user).create(**payload.model_dump()))
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, detail={"code": "duplicate_certificate_id", "message": "Certificate ID already exists."}) from exc
     except ValueError as exc:
         messages = {"duplicate_certificate_id": "Certificate ID already exists.", "invalid_certificate_id": "Certificate ID is invalid or does not match the issue year.", "end_date_before_start_date": "End date must be after the start date."}
         raise HTTPException(409 if str(exc) == "duplicate_certificate_id" else 422, detail={"code": str(exc), "message": messages.get(str(exc), "Invalid internship record.")}) from exc
