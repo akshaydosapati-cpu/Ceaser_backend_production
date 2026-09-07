@@ -175,6 +175,45 @@ def test_stable_follow_up_remains_conversation_route() -> None:
     assert decision.route is KnowledgeRoute.FOLLOW_UP
 
 
+def test_emerging_model_name_uses_live_research() -> None:
+    decision = KnowledgeRouter().classify(
+        message="What do you know about GPT-6 Astra?",
+        has_attached_files=False,
+        is_follow_up=False,
+    )
+
+    assert decision.route is KnowledgeRoute.RESEARCH
+
+
+def test_knowledge_cutoff_follow_up_uses_live_research() -> None:
+    decision = KnowledgeRouter().classify(
+        message="Just tell me till which year you have data.",
+        has_attached_files=False,
+        is_follow_up=True,
+    )
+
+    assert decision.route is KnowledgeRoute.RESEARCH
+
+
+def test_likely_gpt_typo_uses_live_research() -> None:
+    decision = KnowledgeRouter().classify(
+        message="What do you know about got 6 Astra?",
+        has_attached_files=False,
+        is_follow_up=False,
+    )
+
+    assert decision.route is KnowledgeRoute.RESEARCH
+
+
+def test_emerging_model_research_query_preserves_full_name() -> None:
+    from app.services.orchestrator.orchestrator import CeaserOrchestrator
+
+    orchestrator = CeaserOrchestrator.__new__(CeaserOrchestrator)
+
+    assert orchestrator._research_query("What do you know about GPT-6 Astra?") == "GPT-6 Astra"
+    assert orchestrator._research_query("What do you know about got 6 Astra?") == "GPT 6 Astra"
+
+
 def test_serper_search_returns_ranked_results_and_images(monkeypatch) -> None:
     class Response:
         def __init__(self, payload: dict):

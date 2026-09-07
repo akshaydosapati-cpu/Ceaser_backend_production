@@ -2602,6 +2602,15 @@ class CeaserOrchestrator:
         if self._is_current_statistics_request(normalized):
             return self._current_statistics_query(normalized)
 
+        emerging_model = re.search(
+            r"\b(?:gpt|got|gemini|claude|llama|grok|nemotron)\s*-?\s*\d+(?:\.\d+)?(?:\s+[A-Za-z][A-Za-z0-9_-]+)?",
+            normalized,
+            flags=re.I,
+        )
+        if emerging_model:
+            query = emerging_model.group(0).strip()
+            return re.sub(r"^got(?=\s*-?\s*\d)", "GPT", query, flags=re.I)
+
         topic_patterns = [
             r"\bresearch\s+(?:on|about)?\s*(.+?)(?:\s+and\s+(?:give|show|share|list)|\s+then\s+(?:give|show|share|list)|$)",
             r"\bdo\s+(?:some\s+)?research\s+(?:on|about)?\s*(.+?)(?:\s+and\s+(?:give|show|share|list)|\s+then\s+(?:give|show|share|list)|$)",
@@ -2673,7 +2682,10 @@ class CeaserOrchestrator:
         prefix = f"top {count} " if count else ""
         if "startups" in previous_query.lower() or "startup" in previous_query.lower():
             return f"{prefix}{previous_query}".strip()
-        return f"{prefix}startups from {previous_query}".strip()
+        if any(term in message.lower() for term in ("knowledge cutoff", "till which year", "up to date")):
+            return f"{previous_query} latest verified information 2026"
+        cleaned = self._clean_research_query(message)
+        return f"{prefix}{previous_query} {cleaned}".strip()
 
     def _contextualize_follow_up(self, message: str, follow_up_trace: dict) -> str:
         if not follow_up_trace.get("follow_up_detected"):
