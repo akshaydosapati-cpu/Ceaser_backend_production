@@ -435,6 +435,10 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             trace["routing_ms"] = prepared.get("observability", {}).get("routing_ms")
             trace["tool_calls_ms"] = prepared.get("observability", {}).get("tool_calls_ms")
             trace["web_search_requested"] = prepared.get("observability", {}).get("web_search_requested")
+            trace["search_ms"] = prepared.get("observability", {}).get("search_ms")
+            trace["extraction_ms"] = prepared.get("observability", {}).get("extraction_ms")
+            trace["research_assembly_ms"] = prepared.get("observability", {}).get("research_assembly_ms")
+            trace["research_total_ms"] = prepared.get("observability", {}).get("research_total_ms")
             trace["internal_context_found"] = prepared.get("observability", {}).get("internal_context_found")
             trace["memory_match_count"] = prepared.get("observability", {}).get("memory_match_count")
             trace["context_build_ms"] = prepared.get("observability", {}).get("retrieval_time_ms")
@@ -449,13 +453,16 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                 prepared.get("observability", {}).get("retrieval_time_ms"),
             )
             logger.info(
-                "ceaser_stream_stage request_id=%s stage=context_complete context_tokens=%s prepare_ms=%s routing_ms=%s tool_calls_ms=%s web_search_requested=%s internal_context_found=%s memory_match_count=%s context_mode=%s retrieval_scope=%s retrieval_sources=%s",
+                "ceaser_stream_stage request_id=%s stage=context_complete context_tokens=%s prepare_ms=%s routing_ms=%s tool_calls_ms=%s web_search_requested=%s search_ms=%s extraction_ms=%s research_assembly_ms=%s internal_context_found=%s memory_match_count=%s context_mode=%s retrieval_scope=%s retrieval_sources=%s",
                 request_id,
                 prepared.get("observability", {}).get("context_tokens"),
                 prepared.get("observability", {}).get("prepare_ms"),
                 trace.get("routing_ms"),
                 trace.get("tool_calls_ms"),
                 trace.get("web_search_requested"),
+                trace.get("search_ms"),
+                trace.get("extraction_ms"),
+                trace.get("research_assembly_ms"),
                 trace.get("internal_context_found"),
                 trace.get("memory_match_count"),
                 prepared.get("observability", {}).get("context_mode"),

@@ -30,7 +30,7 @@ class MemoryRetriever:
         candidates = self.get_recent_memories(user_id, limit=50)
         query_tokens = _tokens(query)
         ranked = [self._rank_memory(memory, query_tokens) for memory in candidates]
-        ranked = [memory for memory in ranked if memory["matched_terms"] > 0]
+        ranked = [memory for memory in ranked if memory["matched_terms"] > 0 and memory["metadata"].get("status", "active") == "active" and not self._expired(memory["metadata"])]
         ranked.sort(key=lambda item: item["score"], reverse=True)
         return ranked[:limit]
 
@@ -53,13 +53,14 @@ class MemoryRetriever:
         keyword_score = matched_terms * 10
         type_score = TYPE_WEIGHTS.get(memory.memory_type, 1)
         recency_score = self._recency_score(memory.created_at)
-        score = keyword_score + type_score + recency_score
+        metadata = memory.extra_metadata
+        score = keyword_score + type_score + recency_score + float(metadata.get("importance") or 0) + float(metadata.get("confidence_score") or 0)
         return {
             "id": memory.id,
             "user_id": memory.user_id,
             "memory_type": memory.memory_type,
             "content": memory.content,
-            "metadata": memory.extra_metadata,
+            "metadata": metadata,
             "created_at": memory.created_at.isoformat(),
             "score": score,
             "matched_terms": matched_terms,
@@ -70,3 +71,13 @@ class MemoryRetriever:
         value = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
         age_days = max((now - value).days, 0)
         return max(0.0, 5.0 - min(age_days, 5))
+
+    @staticmethod
+    def _expired(metadata: dict) -> bool:
+        value = metadata.get("expires_at")
+        if not value:
+            return False
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+        except ValueError:
+            return False

@@ -53,16 +53,16 @@ def _get_dev_user(db: Session) -> User:
 
 
 def _validate_desktop_user(db: Session, user_id: str | None, device_id: str | None) -> User:
-    user = db.get(User, user_id)
+    query = db.query(User, DesktopDevice.revoked_at).outerjoin(
+        DesktopDevice,
+        (DesktopDevice.user_id == User.id) & (DesktopDevice.device_id == device_id),
+    ).filter(User.id == user_id)
+    row = query.first()
+    user = row[0] if row else None
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid desktop session")
-    if device_id:
-        device = db.query(DesktopDevice).filter(
-            DesktopDevice.user_id == user.id,
-            DesktopDevice.device_id == device_id,
-        ).first()
-        if device and device.revoked_at:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Desktop device revoked")
+    if device_id and row[1]:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Desktop device revoked")
     return user
 
 

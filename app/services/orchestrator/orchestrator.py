@@ -711,6 +711,7 @@ class CeaserOrchestrator:
         # Memory capture is post-response work. It must never delay provider
         # invocation or the first visible token.
         captured_memories: list[dict] = []
+        research_timings = research_result.timings if research_result else {}
         observability = {
             "prepare_ms": round((perf_counter() - started) * 1000, 2),
             "stage_timings": list(request_trace.get("stage_timings", [])),
@@ -733,6 +734,10 @@ class CeaserOrchestrator:
             "memory_used": bool(memories),
             "rag_used": bool(memory_first_context),
             "web_used": bool(research_result),
+            "search_ms": research_timings.get("search_ms", 0.0),
+            "extraction_ms": research_timings.get("extraction_ms", 0.0),
+            "research_assembly_ms": research_timings.get("research_assembly_ms", 0.0),
+            "research_total_ms": research_timings.get("research_total_ms", 0.0),
             "dataset_used": bool(dataset_result and dataset_result.get("rows")),
             "file_lookup_ms": request_trace.get("file_lookup_ms") or knowledge_context.get("file_lookup_ms"),
             "permission_check_ms": request_trace.get("permission_check_ms"),
@@ -2602,6 +2607,25 @@ class CeaserOrchestrator:
         if self._is_current_statistics_request(normalized):
             return self._current_statistics_query(normalized)
 
+        latest_release = re.search(
+            r"\b(?:latest|newest|most recent|new)\s+release\s+of\s+(?:the\s+)?(.+?)[?.!]*$",
+            normalized,
+            flags=re.I,
+        )
+        if latest_release:
+            subject = self._clean_research_query(latest_release.group(1))
+            return f"{subject} latest release official" if subject else normalized
+
+        corporate_event = re.search(
+            r"\b(.+?)\s+(?:acquisition|aquisition|acquired|acquire|buyout|merger|merged)\s+(?:of|with)?\s*(.+?)[?.!]*$",
+            normalized,
+            flags=re.I,
+        )
+        if corporate_event:
+            buyer = re.sub(r"^(?:do you know anything about|what do you know about|tell me about)\s+", "", corporate_event.group(1), flags=re.I).strip()
+            target = corporate_event.group(2).strip()
+            return f"{buyer} acquisition of {target} latest official"
+
         emerging_model = re.search(
             r"\b(?:gpt|got|gemini|claude|llama|grok|nemotron)\s*-?\s*\d+(?:\.\d+)?(?:\s+[A-Za-z][A-Za-z0-9_-]+)?",
             normalized,
@@ -2624,6 +2648,19 @@ class CeaserOrchestrator:
                 cleaned = self._clean_research_query(match.group(1))
                 if cleaned:
                     return cleaned
+
+        if re.search(r"\b(?:latest|current|today|recent|this week|this month|this year|news|up to date)\b", normalized, flags=re.I):
+            current_query = re.sub(
+                r"^(?:what|who|when|where|why|how)\s+(?:do|does|did|is|are|was|were|can)\s+"
+                r"(?:you\s+)?(?:know\s+)?(?:anything\s+)?(?:about\s+)?",
+                "",
+                normalized,
+                flags=re.I,
+            )
+            current_query = re.sub(r"^(?:tell|show|give)\s+me\s+(?:about\s+)?", "", current_query, flags=re.I)
+            cleaned = self._clean_research_query(current_query)
+            if cleaned:
+                return cleaned
 
         name_match = re.search(r"\b(?:name|called)\s+([A-Z][A-Za-z0-9_-]{2,})\b", normalized)
         if name_match:

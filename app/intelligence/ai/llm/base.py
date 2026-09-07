@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -9,20 +10,26 @@ import httpx
 
 
 class LLMProvider(ABC):
-    _http_client: httpx.AsyncClient | None = None
+    _http_clients: dict[asyncio.AbstractEventLoop, httpx.AsyncClient]
 
     @property
     def http_client(self) -> httpx.AsyncClient:
-        client = getattr(self, "_http_client", None)
+        loop = asyncio.get_running_loop()
+        clients = getattr(self, "_http_clients", None)
+        if clients is None:
+            clients = {}
+            self._http_clients = clients
+        client = clients.get(loop)
         if client is None or client.is_closed:
             client = httpx.AsyncClient(
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
             )
-            self._http_client = client
+            clients[loop] = client
         return client
 
     async def aclose(self) -> None:
-        client = getattr(self, "_http_client", None)
+        clients = getattr(self, "_http_clients", {})
+        client = clients.pop(asyncio.get_running_loop(), None)
         if client is not None and not client.is_closed:
             await client.aclose()
 

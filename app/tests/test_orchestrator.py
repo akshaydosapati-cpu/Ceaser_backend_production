@@ -70,6 +70,22 @@ def current_user_dict() -> dict:
     return {"id": user.id, "email": user.email}
 
 
+def test_memory_lifecycle_reinforces_and_supersedes_locations() -> None:
+    user = current_user_dict()
+    db = TestingSessionLocal()
+    service = MemoryService(db)
+    first = service.create(user["id"], "file", "DBMS notes is in Downloads", {"entity": "dbms notes", "relation": "location"})
+    repeated = service.create(user["id"], "file", "DBMS notes is in Downloads", {"entity": "dbms notes", "relation": "location"})
+    assert repeated.id == first.id
+    assert repeated.extra_metadata["reinforcement_count"] == 2
+    latest = service.create(user["id"], "file", "DBMS notes is in Documents", {"entity": "dbms notes", "relation": "location"})
+    db.refresh(first)
+    assert latest.id != first.id
+    assert first.extra_metadata["status"] == "superseded"
+    assert first.extra_metadata["superseded_by"] == latest.id
+    db.close()
+
+
 def test_prepare_stream_fast_chat_skips_expensive_services(monkeypatch) -> None:
     user = current_user_dict()
     db = TestingSessionLocal()

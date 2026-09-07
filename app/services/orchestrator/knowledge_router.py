@@ -65,7 +65,15 @@ class KnowledgeRouter:
         if any(term in text for term in ("remember", "what do you know about me", "my preferences", "saved memory", "my memory", "my name is", "call me ", "i mentioned months ago", "i told you months ago", "years ago", "startup idea i mentioned", "where do i keep", "where is my", "what were we discussing")):
             return RouteDecision(KnowledgeRoute.MEMORY, "personal memory request")
         emerging_model = re.search(r"\b(?:gpt|got|gemini|claude|llama|grok|nemotron)\s*-?\s*\d+(?:\.\d+)?\b", text)
-        if emerging_model or any(term in text for term in ("latest", "current", "today", "yesterday", "news", "live update", "recent", "this week", "this month", "this year", "stock price", "weather", "who won", "score", "stats", "statistics", "centuries", "records", "web search", "search the web", "look up online", "internet", "sources", "citations", "competitor", "market research", "knowledge cutoff", "till which year", "up to date")):
+        corporate_event = bool(
+            re.search(
+                r"\b(?:acquisition|aquisition|buyout)\s+of\b|"
+                r"\b(?:merger|merged)\s+with\b|"
+                r"\b(?:acquired|acquire)\s+(?!mean\b|means\b|accounting\b)[a-z0-9]",
+                text,
+            )
+        )
+        if emerging_model or corporate_event or any(term in text for term in ("latest", "current", "today", "yesterday", "news", "live update", "recent", "this week", "this month", "this year", "stock price", "weather", "who won", "score", "stats", "statistics", "centuries", "records", "web search", "search the web", "look up online", "internet", "sources", "citations", "competitor", "market research", "knowledge cutoff", "till which year", "up to date")):
             return RouteDecision(KnowledgeRoute.RESEARCH, "fresh information request")
         if any(text.startswith(prefix) for prefix in ("open ", "launch ", "start ", "create folder ", "take screenshot", "read clipboard")):
             return RouteDecision(KnowledgeRoute.DESKTOP, "desktop command")
