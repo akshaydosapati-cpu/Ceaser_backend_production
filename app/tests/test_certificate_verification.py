@@ -11,12 +11,13 @@ from app.api.certificates import routes
 from app.core.database.session import get_db
 from app.core.rate_limiter import BoundedRateLimiter
 from app.main import create_app
-from app.models.certificate import Certificate
+from app.models.certificate import Certificate, CertificateDocument
 
 
 engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Certificate.__table__.create(engine, checkfirst=True)
+CertificateDocument.__table__.create(engine, checkfirst=True)
 
 
 def override_db():
@@ -32,34 +33,34 @@ app.dependency_overrides[get_db] = override_db
 client = TestClient(app)
 
 
-def seed(certificate_id: str, status: str, *, document: str | None = None, public: bool = False) -> None:
+def seed(certificate_id: str, status: str, *, document: str | None = None) -> None:
     with TestingSession() as db:
         existing = db.query(Certificate).filter(Certificate.certificate_id == certificate_id).one_or_none()
         if existing:
             db.delete(existing)
             db.flush()
-        db.add(
-            Certificate(
+        record = Certificate(
                 certificate_id=certificate_id,
                 intern_name="Chirag Chouhan",
                 role="QA Testing Intern",
                 organization="CEASER",
                 issue_date=date(2026, 9, 10),
+                start_date=date(2026, 6, 1),
+                end_date=date(2026, 8, 31),
                 status=status,
-                certificate_document=document,
-                certificate_public=public,
-                offer_letter_document=None,
-                offer_letter_public=False,
             )
-        )
+        db.add(record)
+        db.flush()
+        if document:
+            db.add(CertificateDocument(certificate_record_id=record.id, document_type="internship_certificate", storage_path=document, original_filename="certificate.pdf", mime_type="application/pdf", file_size=308736, version=1, status="current"))
         db.commit()
 
 
 def setup_function() -> None:
     routes.rate_limiter = BoundedRateLimiter(max_keys=100, ttl_seconds=60)
-    seed("CEASER-INT-2026-001", "valid", document="bundled://CEASER-INT-2026-001.pdf", public=True)
+    seed("CEASER-INT-2026-001", "published", document="bundled://CEASER-INT-2026-001.pdf")
     seed("CEASER-INT-2026-002", "revoked")
-    seed("CEASER-INT-2026-003", "expired")
+    seed("CEASER-INT-2026-003", "draft")
 
 
 def test_valid_certificate_returns_minimal_public_record() -> None:
@@ -72,10 +73,12 @@ def test_valid_certificate_returns_minimal_public_record() -> None:
         "role": "QA Testing Intern",
         "organization": "CEASER",
         "issue_date": "2026-09-10",
-        "status": "valid",
+        "start_date": "2026-06-01",
+        "end_date": "2026-08-31",
+        "status": "published",
         "verification_url": "https://www.heyceaser.in/verify/CEASER-INT-2026-001",
-        "certificate_url": "http://testserver/certificates/CEASER-INT-2026-001/documents/certificate",
-        "offer_letter_url": None,
+        "has_certificate": True,
+        "has_offer_letter": False,
     }
 
 
@@ -91,27 +94,23 @@ def test_empty_and_malformed_ids_are_rejected() -> None:
     assert client.get("/certificates/%27%20OR%201%3D1--").status_code == 422
 
 
-def test_unknown_revoked_and_expired_states_are_distinct() -> None:
+def test_unknown_revoked_and_draft_states_are_private() -> None:
     assert client.get("/certificates/CEASER-INT-2026-999").status_code == 404
     revoked = client.get("/certificates/CEASER-INT-2026-002")
-    expired = client.get("/certificates/CEASER-INT-2026-003")
+    draft = client.get("/certificates/CEASER-INT-2026-003")
     assert revoked.status_code == 200 and revoked.json()["status"] == "revoked"
-    assert expired.status_code == 200 and expired.json()["status"] == "expired"
+    assert draft.status_code == 404
 
 
-def test_public_certificate_document_is_exact_bundled_pdf() -> None:
+def test_public_certificate_document_is_not_exposed() -> None:
     response = client.get("/certificates/CEASER-INT-2026-001/documents/certificate")
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "application/pdf"
-    assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.content.startswith(b"%PDF")
-    assert len(response.content) == 308736
+    assert response.status_code == 404
 
 
-def test_private_missing_and_traversal_documents_are_blocked() -> None:
+def test_all_public_document_paths_are_blocked() -> None:
     assert client.get("/certificates/CEASER-INT-2026-001/documents/offer-letter").status_code == 404
     assert client.get("/certificates/CEASER-INT-2026-001/documents/..%2F..%2F.env").status_code in {404, 422}
-    assert client.get("/certificates/CEASER-INT-2026-002/documents/certificate").status_code == 403
+    assert client.get("/certificates/CEASER-INT-2026-002/documents/certificate").status_code == 404
 
 
 def test_public_verification_is_rate_limited_by_ip() -> None:

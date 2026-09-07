@@ -3,8 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import ValidationError
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.database.session import get_db
@@ -43,6 +42,8 @@ def _verification_response(certificate_id: str, request: Request, db: Session) -
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "certificate_not_found", "message": "Certificate Not Found"},
         )
+    if certificate.status == "draft":
+        raise HTTPException(status_code=404, detail={"code": "certificate_not_found", "message": "Certificate Not Found"})
     logger.info(
         "certificate_verification request_id=%s certificate_id=%s status=%s",
         getattr(request.state, "request_id", None),
@@ -68,34 +69,3 @@ def get_certificate(
     db: Annotated[Session, Depends(get_db)],
 ) -> PublicCertificateResponse:
     return _verification_response(certificate_id, request, db)
-
-
-@router.get("/{certificate_id}/documents/{kind}")
-def get_certificate_document(
-    certificate_id: str,
-    kind: str,
-    request: Request,
-    db: Annotated[Session, Depends(get_db)],
-) -> Response:
-    _enforce_public_limit(request)
-    service = CertificateService(db)
-    try:
-        certificate = service.find(certificate_id)
-        if certificate is None:
-            raise FileNotFoundError(certificate_id)
-        content, filename = service.public_document(certificate, kind)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "Document unavailable"}) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail={"code": "document_unavailable", "message": "Document unavailable"}) from exc
-    except (FileNotFoundError, OSError) as exc:
-        raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "Document unavailable"}) from exc
-    return Response(
-        content=content,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "Cache-Control": "public, max-age=300",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )

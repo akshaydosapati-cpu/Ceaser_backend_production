@@ -24,7 +24,9 @@ class PublicCertificateResponse(BaseModel):
     role: str
     organization: str
     issue_date: date
-    status: Literal["valid", "revoked", "expired"]
+    start_date: date | None = None
+    end_date: date | None = None
+    status: Literal["published", "revoked"]
     verification_url: str
-    certificate_url: str | None = None
-    offer_letter_url: str | None = None
+    has_certificate: bool
+    has_offer_letter: bool
