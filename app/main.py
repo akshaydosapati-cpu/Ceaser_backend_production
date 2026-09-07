@@ -19,6 +19,7 @@ from app.api.agents.routes import router as agents_router
 from app.api.billing.routes import router as billing_router
 from app.api.capabilities.routes import router as capabilities_router
 from app.api.ceaser.routes import router as ceaser_router
+from app.api.certificates.routes import router as certificates_router
 from app.api.cloud.routes import router as cloud_router
 from app.api.commercial.routes import router as commercial_router
 from app.api.conversations.routes import router as conversations_router
@@ -188,6 +189,7 @@ def create_app() -> FastAPI:
     app.include_router(messages_router)
     app.include_router(chat_router)
     app.include_router(ceaser_router)
+    app.include_router(certificates_router)
     app.include_router(cloud_router)
     app.include_router(billing_router)
     app.include_router(commercial_router)
