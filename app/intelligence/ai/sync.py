@@ -267,12 +267,7 @@ async def stream_text(
                                 trace.get("model"),
                                 trace["first_token_ms"],
                             )
-                # Some compatible endpoints buffer an entire completion and emit it as
-                # one SSE delta. Preserve a responsive typed experience in that case.
-                for chunk_index, progressive_chunk in enumerate(_progressive_chunks(chunk)):
-                    if chunk_index:
-                        await asyncio.sleep(0.012)
-                    yield progressive_chunk
+                yield chunk
             if not yielded_text:
                 raise AIServiceUnavailableError(
                     "Provider stream returned no usable text.",

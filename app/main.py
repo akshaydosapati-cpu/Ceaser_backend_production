@@ -137,6 +137,13 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[
+            "X-Request-Id",
+            "X-Process-Time-Ms",
+            "X-Database-Time-Ms",
+            "X-Database-Query-Count",
+            "Server-Timing",
+        ],
         max_age=600,
     )
 

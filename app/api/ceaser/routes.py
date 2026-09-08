@@ -311,7 +311,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
     message = payload.message
     conversation_id = payload.conversation_id
     file_ids = list(payload.file_ids)
-    request_id = str(uuid.uuid4())
+    request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
     billing_id = f"chat:{payload.request_id or request_id}"
     auth_trace = getattr(request.state, "ceaser_auth_trace", {})
     rate_started = perf_counter()
@@ -539,8 +539,8 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                         json.dumps(trace.get("prepare_stage_timings", []), ensure_ascii=True, separators=(",", ":")),
                     )
                     first_sse_token_logged = True
-                    yield event("token", chunk)
                     trace["first_token_forwarding_ms"] = round((perf_counter() - token_received_at) * 1000, 2)
+                    yield event("token", chunk)
                     # Durability begins only after the first chunk has been
                     # forwarded. A database commit must never delay user TTFT.
                     assistant_message = orchestrator.begin_stream_response(prepared)
@@ -556,7 +556,10 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             trace["output_tokens"] = max(1, round(len(response_text) / 4)) if response_text else 0
             trace["total_time_ms"] = round((perf_counter() - started) * 1000, 2)
             prepared["stream_trace"] = trace
+            persistence_started = perf_counter()
             response = orchestrator.finalize_stream_response(prepared, response_text, assistant_message=assistant_message)
+            trace["persistence_ms"] = round((perf_counter() - persistence_started) * 1000, 2)
+            logger.info("ceaser_stream_stage request_id=%s stage=persistence_complete persistence_ms=%s elapsed_ms=%.2f", request_id, trace["persistence_ms"], (perf_counter() - started) * 1000)
             if trace.get("structural_completion_blocked"):
                 response["status"] = "partial"
                 response["completion_warning"] = "The code artifact needs continuation before it is complete."
