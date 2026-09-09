@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database.session import SessionLocal, database_timing, get_db
+from app.core.database.execution import run_serial_db
 from app.core.security.dependencies import get_current_user
 from app.intelligence.ai.model_router import request_for_chat
 from app.intelligence.ai.sync import generate_text_sync, stream_text
@@ -341,13 +342,13 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
         # conversation first so both records are committed in that transaction.
         if not conversation_id:
             conversation_started = perf_counter()
-            conversation = ConversationService(db).create_pending(user_id=user.id)
+            conversation = await run_serial_db(ConversationService(db).create_pending, user_id=user_id)
             conversation_id = conversation.id
             conversation_lookup_ms = round((perf_counter() - conversation_started) * 1000, 2)
         else:
             conversation_lookup_ms = 0.0
         reserve_started = perf_counter()
-        reservation = credits.reserve(user.id, billing_id, "ai_conversation")
+        reservation = await run_serial_db(credits.reserve, user_id, billing_id, "ai_conversation")
         credit_reservation_ms = round((perf_counter() - reserve_started) * 1000, 2)
         db_count_after, db_ms_after = database_timing()
         logger.info(
@@ -355,6 +356,13 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             request_id, credit_reservation_ms,
             max(0, db_count_after - db_count_before), max(0.0, db_ms_after - db_ms_before),
         )
+    except asyncio.CancelledError:
+        try:
+            await run_serial_db(db.rollback)
+            await run_serial_db(credits.release, user_id, billing_id)
+        finally:
+            rate_limiter.release("chat-generation", user_id)
+        raise
     except InsufficientCreditsError as exc:
         rate_limiter.release("chat-generation", user_id)
         raise HTTPException(status_code=402, detail="Insufficient CEASER credits.") from exc
@@ -365,16 +373,18 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
     # reservation is committed/refreshed here and must not be dereferenced
     # after the request session has expired or been detached.
     try:
-        reservation_estimated_credits = int(reservation.estimated_credits)
+        snapshot_started = perf_counter()
+        reservation_estimated_credits = await run_serial_db(lambda: int(reservation.estimated_credits))
+        reservation_snapshot_ms = round((perf_counter() - snapshot_started) * 1000, 2)
         # A new chat is created authoritatively inside the stream request. This
         # removes the frontend's blocking create-conversation round trip while
         # preserving one durable conversation and the existing ownership checks.
         if conversation is not None:
             logger.info("ceaser_stream_stage request_id=%s stage=conversation_created duration_ms=%.2f", request_id, conversation_lookup_ms)
-    except Exception:
-        db.rollback()
+    except (Exception, asyncio.CancelledError):
+        await run_serial_db(db.rollback)
         try:
-            credits.release(user_id, billing_id)
+            await run_serial_db(credits.release, user_id, billing_id)
         finally:
             rate_limiter.release("chat-generation", user_id)
         raise
@@ -406,10 +416,12 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             "pre_stream_ms": round((perf_counter() - request_received) * 1000, 2),
             "auth_remote_ms": auth_trace.get("remote_ms"),
             "auth_db_validation_ms": auth_trace.get("db_validation_ms"),
+            "auth_db_query_ms": auth_trace.get("db_query_ms"),
             "rate_check_ms": rate_check_ms,
             "concurrency_check_ms": concurrency_check_ms,
             "credit_reservation_ms": credit_reservation_ms,
             "conversation_create_ms": conversation_lookup_ms,
+            "reservation_snapshot_ms": reservation_snapshot_ms,
         }
         first_sse_token_logged = False
         completed_meaningfully = False
@@ -421,7 +433,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             logger.info("ceaser_stream_stage request_id=%s stage=retrieval_started", request_id)
             prepare_started = perf_counter()
             trace["prepare_started_ms"] = round((prepare_started - started) * 1000, 2)
-            prepared = await asyncio.to_thread(
+            prepared = await run_serial_db(
                 orchestrator.prepare_stream_request,
                 user_id=user_id,
                 message=message,
@@ -436,6 +448,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             trace["prepare_completed_ms"] = round((stage_marks["prepared"] - started) * 1000, 2)
             trace["prepare_stream_request_ms"] = round((stage_marks["prepared"] - prepare_started) * 1000, 2)
             trace["prepare_stage_timings"] = prepared.get("observability", {}).get("stage_timings", [])
+            trace["prepare_worker_ms"] = prepared.get("observability", {}).get("prepare_ms")
             trace["retrieval_time_ms"] = prepared.get("observability", {}).get("retrieval_time_ms")
             trace["routing_ms"] = prepared.get("observability", {}).get("routing_ms")
             trace["tool_calls_ms"] = prepared.get("observability", {}).get("tool_calls_ms")
@@ -552,13 +565,13 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                         db_queries=db_queries, db_ms=db_ms))
                     # Durability begins only after the first chunk has been
                     # forwarded. A database commit must never delay user TTFT.
-                    assistant_message = orchestrator.begin_stream_response(prepared)
+                    assistant_message = await run_serial_db(orchestrator.begin_stream_response, prepared)
                     if assistant_message:
-                        orchestrator.persist_stream_response(assistant_message, response_so_far)
+                        await run_serial_db(orchestrator.persist_stream_response, assistant_message, response_so_far)
                         persisted_length = len(response_so_far)
                     continue
                 if assistant_message and len(response_so_far) - persisted_length >= 360:
-                    orchestrator.persist_stream_response(assistant_message, response_so_far)
+                    await run_serial_db(orchestrator.persist_stream_response, assistant_message, response_so_far)
                     persisted_length = len(response_so_far)
                 yield event("token", chunk)
             response_text = "".join(chunks).strip()
@@ -566,7 +579,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             trace["total_time_ms"] = round((perf_counter() - started) * 1000, 2)
             prepared["stream_trace"] = trace
             persistence_started = perf_counter()
-            response = orchestrator.finalize_stream_response(prepared, response_text, assistant_message=assistant_message)
+            response = await run_serial_db(orchestrator.finalize_stream_response, prepared, response_text, assistant_message=assistant_message)
             trace["persistence_ms"] = round((perf_counter() - persistence_started) * 1000, 2)
             logger.info("ceaser_stream_stage request_id=%s stage=persistence_complete persistence_ms=%s elapsed_ms=%.2f", request_id, trace["persistence_ms"], (perf_counter() - started) * 1000)
             if trace.get("structural_completion_blocked"):
@@ -627,7 +640,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                 trace.get("provider_generation_ms"),
                 trace.get("output_tokens"),
             )
-            AuditService(stream_db).record(
+            await run_serial_db(AuditService(stream_db).record,
                 user_id=user_id,
                 action="message_created",
                 resource_type="conversation",
@@ -648,25 +661,25 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             yield event("response.failed", {"id": request_id, "status": "failed", "error": {"category": "validation", "message": str(exc), "retryable": False}})
             yield event("error", {"message": str(exc)})
         except Exception:
-            stream_db.rollback()
+            await run_serial_db(stream_db.rollback)
             logger.exception("ceaser_chat_stream_failed user_id=%s conversation_id=%s", user_id, conversation_id)
             yield event("response.failed", {"id": request_id, "status": "failed", "error": {"category": "internal", "message": "We couldn't complete your request. Please try again.", "retryable": True}})
             yield event("error", {"message": "We couldn't complete your request. Please try again."})
         finally:
             try:
                 if completed_meaningfully:
-                    stream_credits.settle(user_id, billing_id, reservation_estimated_credits, meaningful_output=True)
+                    await run_serial_db(stream_credits.settle, user_id, billing_id, reservation_estimated_credits, meaningful_output=True)
                 else:
-                    stream_db.rollback()
-                    stream_credits.release(user_id, billing_id)
+                    await run_serial_db(stream_db.rollback)
+                    await run_serial_db(stream_credits.release, user_id, billing_id)
             except Exception:
                 # Tokens may already be visible. Keep the user response intact
                 # while recording the accounting failure for repair/audit.
-                stream_db.rollback()
+                await run_serial_db(stream_db.rollback)
                 logger.exception("ceaser_stream_settlement_failed user_id=%s billing_id=%s", user_id, billing_id)
             finally:
                 rate_limiter.release("chat-generation", user_id)
-                stream_db.close()
+                await run_serial_db(stream_db.close)
 
     # Keep SSE events flowing through hosting proxies as they are produced.
     # Without no-transform / X-Accel-Buffering, a proxy can hold small token

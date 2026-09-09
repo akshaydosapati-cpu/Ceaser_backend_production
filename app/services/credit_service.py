@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from time import perf_counter
 from datetime import timedelta, timezone
 from typing import Any
 
@@ -9,6 +10,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config.settings import settings
+from app.core.database.execution import measured_db_call
 from app.models.commercial import Plan, Subscription
 from app.models.growth import CreditLedger, CreditProduct, CreditPurchase, CreditReservation, CreditWallet, Referral, ReferralCode
 from app.models.mixins import utc_now
@@ -69,7 +71,7 @@ class CreditService:
         if existing:
             return existing
         estimate = max(0, int(estimate if estimate is not None else settings.credit_costs.get(workload, settings.credit_costs.get("agent_workflow", 20))))
-        wallet = self.wallet(user_id, lock=True)
+        wallet = measured_db_call(self.wallet, perf_counter(), user_id, lock=True)
         reserved = self.db.execute(
             update(CreditWallet)
             .where(CreditWallet.id == wallet.id)
@@ -91,7 +93,7 @@ class CreditService:
             metadata={"credit_estimate": estimate},
         )
         try:
-            self.db.commit()
+            measured_db_call(self.db.commit, perf_counter())
         except IntegrityError:
             self.db.rollback()
             existing = self.db.query(CreditReservation).filter_by(user_id=user_id, request_id=request_id).first()

@@ -1,5 +1,5 @@
 from typing import Annotated
-from time import monotonic
+from time import monotonic, perf_counter
 from threading import Lock
 import logging
 
@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.config.settings import settings
 from app.core.database.session import database_timing, get_db
+from app.core.database.execution import measured_db_call
 from app.core.security.supabase_auth import supabase_auth
 from app.models.user import User
 from app.models.desktop import DesktopDevice
@@ -67,6 +68,7 @@ def _validate_desktop_user(db: Session, user_id: str | None, device_id: str | No
 
 
 def _get_or_create_supabase_user(db: Session, user_id: str, email: str) -> User:
+    measured_db_call(db.connection, perf_counter())
     repo = UserRepository(db)
     user = repo.get(user_id) or repo.get_by_email(email)
     if user is None:
@@ -152,7 +154,7 @@ async def get_current_user(
         # Supabase has already validated the token. Existing local identities
         # need only a read; committing and refreshing an unchanged user added
         # two remote database round trips to every authenticated request.
-        user = await run_in_threadpool(_get_or_create_supabase_user, db, user_id, email)
+        user = await run_in_threadpool(measured_db_call, _get_or_create_supabase_user, perf_counter(), db, user_id, email)
         auth_trace.update(mode="supabase", db_validation_ms=round((monotonic() - db_started) * 1000, 2))
         db_count_after, db_ms_after = database_timing()
         auth_trace.update(
