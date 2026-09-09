@@ -402,6 +402,8 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
         trace: dict[str, object] = {
             "request_id": request_id,
             "auth_total_ms": auth_trace.get("total_ms"),
+            "route_entry_ms": round((route_entered - request_received) * 1000, 2),
+            "pre_stream_ms": round((perf_counter() - request_received) * 1000, 2),
             "auth_remote_ms": auth_trace.get("remote_ms"),
             "auth_db_validation_ms": auth_trace.get("db_validation_ms"),
             "rate_check_ms": rate_check_ms,
@@ -418,6 +420,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             logger.info("ceaser_latency request_id=%s agent_started_ms=%s", request_id, trace["agent_started_ms"])
             logger.info("ceaser_stream_stage request_id=%s stage=retrieval_started", request_id)
             prepare_started = perf_counter()
+            trace["prepare_started_ms"] = round((prepare_started - started) * 1000, 2)
             prepared = await asyncio.to_thread(
                 orchestrator.prepare_stream_request,
                 user_id=user_id,
@@ -430,6 +433,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                 force_live_web_search=payload.force_live_web_search,
             )
             stage_marks["prepared"] = perf_counter()
+            trace["prepare_completed_ms"] = round((stage_marks["prepared"] - started) * 1000, 2)
             trace["prepare_stream_request_ms"] = round((stage_marks["prepared"] - prepare_started) * 1000, 2)
             trace["prepare_stage_timings"] = prepared.get("observability", {}).get("stage_timings", [])
             trace["retrieval_time_ms"] = prepared.get("observability", {}).get("retrieval_time_ms")

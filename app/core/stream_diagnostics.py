@@ -9,7 +9,11 @@ TIMING_FIELDS = (
     "research_total_ms", "model_selection_ms", "prompt_build_ms",
     "provider_connect_ms", "first_token_ms", "llm_request_sent_ms",
     "endpoint_ttft_ms", "first_token_forwarding_ms", "persistence_ms",
+    "route_entry_ms", "pre_stream_ms", "prepare_started_ms", "prepare_completed_ms",
 )
+PREPARE_STAGES = frozenset({"attached_documents", "conversation_lookup", "history_load",
+    "knowledge_classification", "agent_or_workflow_selection", "context_mode_and_rag_decision",
+    "memory_decision", "web_and_tool_decision", "dataset_decision", "prompt_context_assembly"})
 
 
 def stream_diagnostics(trace, *, request_id, stage, elapsed_ms, db_queries, db_ms):
@@ -21,4 +25,16 @@ def stream_diagnostics(trace, *, request_id, stage, elapsed_ms, db_queries, db_m
             result[key] = round(value, 2)
     # Never copy arbitrary context, prompts, user IDs, errors, or provider bodies.
     result["fallback_used"] = trace.get("fallback_used") is True
+    stages = []
+    for item in trace.get("prepare_stage_timings", [])[:32]:
+        if not isinstance(item, dict) or item.get("stage") not in PREPARE_STAGES:
+            continue
+        safe = {"stage": item["stage"]}
+        for key in ("duration_ms", "db_queries", "db_ms"):
+            value = item.get(key)
+            if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+                safe[key] = value
+        stages.append(safe)
+    if stages:
+        result["prepare_stages"] = stages
     return result
