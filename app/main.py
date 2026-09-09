@@ -106,6 +106,11 @@ def create_app() -> FastAPI:
             response.headers["X-Database-Time-Ms"] = str(database_ms)
             response.headers["X-Database-Query-Count"] = str(query_count)
             response.headers["Server-Timing"] = f"app;dur={elapsed_ms}, db;dur={database_ms}"
+            auth_trace = getattr(request.state, "ceaser_auth_trace", {})
+            for label, key in (("auth", "total_ms"), ("auth_remote", "remote_ms"), ("auth_db", "db_validation_ms")):
+                value = auth_trace.get(key)
+                if type(value) in (int, float) and 0 <= value < 3600000:
+                    response.headers["Server-Timing"] += f", {label};dur={value:.2f}"
             logger.info(
                 "request_complete method=%s path=%s status=%s request_id=%s elapsed_ms=%s db_ms=%s db_queries=%s",
                 request.method,

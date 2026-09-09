@@ -11,6 +11,7 @@ from time import perf_counter
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from app.core.rate_limiter import rate_limiter
+from app.core.stream_diagnostics import stream_diagnostics
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -541,6 +542,10 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
                     first_sse_token_logged = True
                     trace["first_token_forwarding_ms"] = round((perf_counter() - token_received_at) * 1000, 2)
                     yield event("token", chunk)
+                    db_queries, db_ms = database_timing()
+                    yield event("diagnostics", stream_diagnostics(trace, request_id=request_id,
+                        stage="first_content_forwarded", elapsed_ms=(perf_counter() - started) * 1000,
+                        db_queries=db_queries, db_ms=db_ms))
                     # Durability begins only after the first chunk has been
                     # forwarded. A database commit must never delay user TTFT.
                     assistant_message = orchestrator.begin_stream_response(prepared)
@@ -629,6 +634,10 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             yield event("activity", rich["activity"][0])
             yield event("response.completed", rich)
             yield event("complete", response)
+            db_queries, db_ms = database_timing()
+            yield event("diagnostics", stream_diagnostics(trace, request_id=request_id,
+                stage="response_completed", elapsed_ms=(perf_counter() - started) * 1000,
+                db_queries=db_queries, db_ms=db_ms))
             completed_meaningfully = bool(response.get("response"))
             logger.info("ceaser_stream_stage request_id=%s stage=request_complete total_ms=%s", request_id, trace.get("total_time_ms"))
         except ValueError as exc:
