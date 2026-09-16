@@ -41,11 +41,12 @@ class MemoryRetriever:
         return ranked[:limit]
 
     def get_recent_memories(self, user_id: str, limit: int = 10) -> list[Memory]:
-        return self.memories.list(user_id=user_id)[:limit]
+        return self.memories.list(user_id=user_id, limit=limit)
 
     def get_project_memories(self, user_id: str, limit: int = 10) -> list[dict]:
-        memories = [memory for memory in self.memories.list(user_id=user_id) if memory.memory_type == "project"]
-        return [self._rank_memory(memory, set()) for memory in memories[:limit]]
+        memories = self.memories.list(user_id=user_id, limit=200)
+        project_memories = [memory for memory in memories if memory.memory_type == "project"]
+        return [self._rank_memory(memory, set()) for memory in project_memories[:limit]]
 
     def _rank_memory(self, memory: Memory, query_tokens: set[str]) -> dict:
         memory_tokens = _tokens(memory.content)

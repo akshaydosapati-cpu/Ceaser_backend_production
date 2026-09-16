@@ -9,11 +9,14 @@ class MemoryRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def list(self, user_id: str | None = None) -> list[Memory]:
+    def list(self, user_id: str | None = None, limit: int | None = None) -> list[Memory]:
         query = self.db.query(Memory)
         if user_id:
             query = query.filter(Memory.user_id == user_id)
-        return query.order_by(Memory.created_at.desc()).all()
+        query = query.order_by(Memory.created_at.desc())
+        if limit is not None:
+            query = query.limit(limit)
+        return query.all()
 
     def get(self, memory_id: str) -> Memory | None:
         return self.db.get(Memory, memory_id)

@@ -28,17 +28,20 @@ class GeminiFallbackProvider(LLMProvider):
         temperature: float | None = None,
         max_output_tokens: int | None = None,
     ) -> str:
-        prompt = self._prompt(instructions=instructions, input_text=input_text)
         data = await self._post(
-            prompt=prompt,
+            instructions=instructions,
+            input_text=input_text,
             model=model or settings.gemini_model,
             temperature=temperature if temperature is not None else settings.gemini_temperature,
             max_tokens=max_output_tokens or settings.gemini_max_tokens,
         )
         text = self._extract_text(data)
         if self._needs_retry(text):
+            # Retry uses a corrective user message that embeds the bad answer inline;
+            # the retry prompt is legitimately a single user-turn blob.
             data = await self._post(
-                prompt=self._retry_prompt(instructions=instructions, input_text=input_text, bad_answer=text),
+                instructions=instructions,
+                input_text=self._retry_prompt(instructions=instructions, input_text=input_text, bad_answer=text),
                 model=model or settings.gemini_model,
                 temperature=0.2,
                 max_tokens=max(max_output_tokens or settings.gemini_max_tokens, 900),
@@ -71,16 +74,25 @@ class GeminiFallbackProvider(LLMProvider):
         max_output_tokens: int | None = None,
         trace: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
-        prompt = self._prompt(instructions=instructions, input_text=input_text)
         model_name = model or settings.gemini_model
         if not settings.gemini_api_key:
             raise AIServiceUnavailableError("GEMINI_API_KEY is not configured.", retryable=False, provider="gemini", category="configuration")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:streamGenerateContent"
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "systemInstruction": {"parts": [{"text": instructions}]},
+            "contents": [{"role": "user", "parts": [{"text": input_text}]}],
             "generationConfig": {"temperature": settings.gemini_temperature, "maxOutputTokens": max_output_tokens or settings.gemini_max_tokens},
         }
-        timeout = httpx.Timeout(connect=settings.llm_connect_timeout_seconds, read=settings.llm_total_timeout_seconds, write=settings.llm_total_timeout_seconds, pool=settings.llm_total_timeout_seconds)
+        timeout = httpx.Timeout(
+            connect=settings.llm_connect_timeout_seconds,
+            # Cap first-token wait at the same 4s ceiling used by OpenAI/Groq/HuggingFace.
+            # llm_total_timeout_seconds (default 45s) was previously used here, causing
+            # silent 45s hangs on stalled Gemini serving nodes before fallback fired.
+            # Once the stream starts, write/pool timeouts preserve the full stream budget.
+            read=min(settings.llm_first_token_timeout_seconds, 4.0),
+            write=settings.llm_total_timeout_seconds,
+            pool=settings.llm_total_timeout_seconds,
+        )
         started = perf_counter()
         finish_reason = ""
         emitted = False
@@ -135,13 +147,14 @@ class GeminiFallbackProvider(LLMProvider):
             if trace is not None:
                 trace["finish_reason"] = {"MAX_TOKENS": "length", "STOP": "stop"}.get(finish_reason, finish_reason.lower() or None)
 
-    async def _post(self, *, prompt: str, model: str, temperature: float, max_tokens: int) -> dict[str, Any]:
+    async def _post(self, *, instructions: str, input_text: str, model: str, temperature: float, max_tokens: int) -> dict[str, Any]:
         if not settings.gemini_api_key:
             logger.error("Gemini fallback blocked: GEMINI_API_KEY is not configured.")
             raise AIServiceUnavailableError("GEMINI_API_KEY is not configured.")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "systemInstruction": {"parts": [{"text": instructions}]},
+            "contents": [{"role": "user", "parts": [{"text": input_text}]}],
             "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
         }
         try:

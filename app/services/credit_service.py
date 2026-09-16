@@ -6,6 +6,7 @@ from datetime import timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
@@ -20,6 +21,10 @@ from app.services.usage_ledger_service import UsageLedgerService, feature_for_wo
 
 
 class InsufficientCreditsError(ValueError):
+    pass
+
+
+class ReservationConflictError(ValueError):
     pass
 
 
@@ -66,10 +71,19 @@ class CreditService:
             "history": [{"id": item.id, "amount": item.amount, "balance_type": item.balance_type, "type": item.transaction_type, "source": item.source, "created_at": item.created_at} for item in recent],
         }
 
-    def reserve(self, user_id: str, request_id: str, workload: str, estimate: int | None = None) -> CreditReservation:
+    @staticmethod
+    def _reuse_reservation(existing: CreditReservation, workload: str, allow_existing: bool) -> CreditReservation:
+        expires = existing.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if not allow_existing or existing.status != "reserved" or existing.workload != workload or expires <= utc_now():
+            raise ReservationConflictError("Request ID already used. Start a new request.")
+        return existing
+
+    def reserve(self, user_id: str, request_id: str, workload: str, estimate: int | None = None, *, allow_existing: bool = True) -> CreditReservation:
         existing = self.db.query(CreditReservation).filter_by(user_id=user_id, request_id=request_id).first()
         if existing:
-            return existing
+            return self._reuse_reservation(existing, workload, allow_existing)
         estimate = max(0, int(estimate if estimate is not None else settings.credit_costs.get(workload, settings.credit_costs.get("agent_workflow", 20))))
         wallet = measured_db_call(self.wallet, perf_counter(), user_id, lock=True)
         reserved = self.db.execute(
@@ -98,8 +112,11 @@ class CreditService:
             self.db.rollback()
             existing = self.db.query(CreditReservation).filter_by(user_id=user_id, request_id=request_id).first()
             if existing:
-                return existing
+                return self._reuse_reservation(existing, workload, allow_existing)
             raise
+        # This scalar was just committed by this transaction. Preserve it without
+        # disabling expiration globally or issuing another SELECT for the caller.
+        set_committed_value(reservation, "estimated_credits", estimate)
         return reservation
 
     def settle(self, user_id: str, request_id: str, actual: int, *, meaningful_output: bool = True) -> CreditReservation:

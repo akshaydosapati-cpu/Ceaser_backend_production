@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.admin.routes import require_admin_user
 from app.core.database.session import get_db
+from app.core.database.execution import run_serial_db
 from app.models.certificate import Certificate, CertificateDocument
 from app.models.user import User
 from app.services.internship_admin_service import InternshipAdminService
@@ -92,7 +93,9 @@ def update_record(record_id: str, payload: InternshipUpdate, user: Annotated[Use
 @router.post("/{record_id}/documents", status_code=201)
 async def upload_document(record_id: str, user: Annotated[User, Depends(require_admin_user)], db: Annotated[Session, Depends(get_db)], document_type: Annotated[str, Form()], upload: Annotated[UploadFile, File()]) -> dict:
     try:
-        document = InternshipAdminService(db, user).upload(get_record(record_id, db), document_type=document_type, filename=upload.filename or "document.pdf", content_type=upload.content_type or "", content=await upload.read(12 * 1024 * 1024 + 1))
+        content = await upload.read(12 * 1024 * 1024 + 1)
+        record = await run_serial_db(get_record, record_id, db)
+        document = await run_serial_db(InternshipAdminService(db, user).upload, record, document_type=document_type, filename=upload.filename or "document.pdf", content_type=upload.content_type or "", content=content)
         return {"id": document.id, "document_type": document.document_type, "original_filename": document.original_filename, "version": document.version, "status": document.status}
     except ValueError as exc:
         message = {"invalid_pdf": "Only valid PDF files are supported.", "file_too_large": "File exceeds the 12 MB limit.", "unsupported_document_type": "Unsupported document type."}.get(str(exc), "Upload failed. Please try again.")

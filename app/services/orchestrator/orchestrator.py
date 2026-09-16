@@ -447,10 +447,12 @@ class CeaserOrchestrator:
                 "db_queries": query_count,
                 "db_ms": query_ms,
             })
+            log_started = perf_counter()
             logger.info(
                 "ceaser_prepare_stage request_id=%s stage=%s duration_ms=%s db_queries=%s db_ms=%s",
                 request_id, stage, duration_ms, query_count, query_ms,
             )
+            request_trace["logging_ms"] = request_trace.get("logging_ms", 0.0) + (perf_counter() - log_started) * 1000
             stage_started = perf_counter()
             stage_db_count, stage_db_ms = db_count, db_ms
 
@@ -470,7 +472,9 @@ class CeaserOrchestrator:
                 trace=request_trace,
             )
 
-        conversation = conversation or self._get_conversation(conversation_id)
+        conversation = conversation or self._get_conversation(conversation_id, user_id=user_id)
+        if conversation is not None and conversation.user_id != user_id:
+            raise ValueError("Conversation not found.")
         mark_stage("conversation_lookup")
         conversation_context = self._conversation_context(conversation)
         mark_stage("history_load")
@@ -758,7 +762,7 @@ class CeaserOrchestrator:
             "global_memory_used": bool(memories),
             "stage_timings": request_trace.get("stage_timings", []),
         }
-        return {
+        prepared = {
             "mode": "generate",
             "user_id": user_id,
             "message": message,
@@ -805,6 +809,12 @@ class CeaserOrchestrator:
                 "research_result": research_result.model_dump() if research_result else None,
             },
         }
+        observability["prepare_ms"] = round((perf_counter() - started) * 1000, 2)
+        observability["prepare_logging_ms"] = round(request_trace.get("logging_ms", 0.0), 2)
+        observability["prepare_unattributed_ms"] = round(max(0.0, observability["prepare_ms"] - sum(
+            stage["duration_ms"] for stage in request_trace.get("stage_timings", [])
+        ) - observability["prepare_logging_ms"]), 2)
+        return prepared
 
     def begin_stream_response(self, prepared: dict[str, Any]) -> Message | None:
         """Create a durable assistant message before a long stream finishes."""
@@ -818,17 +828,22 @@ class CeaserOrchestrator:
             }
         if prepared.get("defer_user_turn"):
             title = self.conversations.generate_title(prepared["original_message"]) if conversation.title == "New Chat" else None
-            return self.conversations.begin_stream_turn(
+            assistant = self.conversations.begin_stream_turn(
                 conversation,
                 user_content=prepared["original_message"],
                 user_metadata=prepared.get("user_message_metadata"),
                 assistant_metadata=assistant_metadata,
                 title=title,
             )
-        return self.conversations.create_message(
-            conversation_id=conversation.id, role="assistant", content="",
-            metadata=assistant_metadata, ingest_knowledge=False,
-        )
+        else:
+            assistant = self.conversations.create_message(
+                conversation_id=conversation.id, role="assistant", content="",
+                metadata=assistant_metadata, ingest_knowledge=False,
+            )
+        # Retain the ID inside the worker before cancellation can discard its
+        # return value. Message metadata is encrypted and cannot be SQL-filtered.
+        prepared["assistant_message_id"] = assistant.id
+        return assistant
 
     def persist_stream_response(self, assistant_message: Message | None, content: str) -> None:
         """Checkpoint partial text so a browser refresh never loses a stream."""
@@ -2192,10 +2207,35 @@ class CeaserOrchestrator:
         )
         return any(term in normalized for term in terms)
 
-    def _get_conversation(self, conversation_id: str | None) -> Conversation | None:
+    def _get_conversation(self, conversation_id: str | None, *, user_id: str | None = None) -> Conversation | None:
         if not conversation_id:
             return None
+        if user_id is not None:
+            conversation = self.db.query(Conversation).filter(
+                Conversation.id == conversation_id, Conversation.user_id == user_id,
+            ).first()
+            if conversation is None:
+                raise ValueError("Conversation not found.")
+            return conversation
         return self.conversations.get(conversation_id)
+
+    def interrupt_stream_response(self, prepared: dict[str, Any], content: str) -> None:
+        """Persist the last visible prefix without duplicating an already-created turn."""
+        conversation_id = prepared.get("conversation_id")
+        if not conversation_id or prepared.get("mode") != "generate":
+            return
+        message_id = prepared.get("assistant_message_id")
+        message = self.db.get(Message, message_id) if message_id else None
+        if message is None:
+            message = self.begin_stream_response(prepared)
+        if message is not None:
+            # Never replace a longer durable prefix after interrupted worker work.
+            if len(content) > len(message.content or ""):
+                message.content = content
+            message.extra_metadata = {
+                **(message.extra_metadata or {}), "streaming": False, "status": "interrupted",
+            }
+            self.db.commit()
 
     def _conversation_context(self, conversation: Conversation | None) -> dict:
         if not conversation:

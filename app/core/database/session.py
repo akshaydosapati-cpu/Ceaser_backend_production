@@ -15,6 +15,7 @@ _is_sqlite = settings.database_url.startswith("sqlite")
 class _DatabaseTiming:
     count: int = 0
     milliseconds: float = 0.0
+    request_id: str | None = None
     lock: Lock = field(default_factory=Lock)
 
 
@@ -38,8 +39,13 @@ engine = create_engine(settings.database_url, **_engine_options)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def begin_database_timing():
-    return _database_timing.set(_DatabaseTiming())
+def begin_database_timing(request_id: str | None = None):
+    return _database_timing.set(_DatabaseTiming(request_id=request_id))
+
+
+def database_request_id() -> str | None:
+    timing = _database_timing.get()
+    return timing.request_id if timing is not None else None
 
 
 def database_timing() -> tuple[int, float]:

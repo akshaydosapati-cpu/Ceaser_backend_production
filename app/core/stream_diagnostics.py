@@ -12,6 +12,7 @@ TIMING_FIELDS = (
     "route_entry_ms", "pre_stream_ms", "prepare_started_ms", "prepare_completed_ms",
     "reservation_snapshot_ms",
     "auth_db_query_ms", "prepare_worker_ms",
+    "prepare_logging_ms", "prepare_unattributed_ms",
 )
 PREPARE_STAGES = frozenset({"attached_documents", "conversation_lookup", "history_load",
     "knowledge_classification", "agent_or_workflow_selection", "context_mode_and_rag_decision",

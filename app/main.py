@@ -96,7 +96,7 @@ def create_app() -> FastAPI:
         request.state.request_id = request_id
         started = perf_counter()
         request.state.ceaser_request_received_at = started
-        timing_tokens = begin_database_timing()
+        timing_tokens = begin_database_timing(request_id=request_id)
         try:
             response = await call_next(request)
             elapsed_ms = round((perf_counter() - started) * 1000)

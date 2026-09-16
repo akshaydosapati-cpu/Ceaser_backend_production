@@ -22,7 +22,11 @@ class LLMProvider(ABC):
         client = clients.get(loop)
         if client is None or client.is_closed:
             client = httpx.AsyncClient(
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
+                # keepalive_expiry raised from 30s → 120s: providers are singleton objects
+                # cached in ModelRouter._providers for the process lifetime; longer keepalive
+                # means TCP+TLS connections survive short idle gaps (nights, inter-message pauses)
+                # and do not eat into the 4s first-token timeout on reconnect.
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=120.0),
             )
             clients[loop] = client
         return client

@@ -137,6 +137,10 @@ async def get_current_user(
         else:
             logger.info("ceaser_auth_stage stage=supabase_cache_hit")
             auth_trace.update(cache_hit=True, remote_ms=0.0)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500 or exc.response.status_code == 429:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Authentication service temporarily unavailable") from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session") from exc
     except (httpx.RequestError, TimeoutError) as exc:
         logger.warning("ceaser_auth_stage stage=supabase_unavailable error=%s", exc.__class__.__name__)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Authentication service temporarily unavailable") from exc

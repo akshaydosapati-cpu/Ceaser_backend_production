@@ -314,6 +314,10 @@ async def stream_text(
                 exc.category,
                 exc.detail,
             )
+            if yielded_text:
+                if trace is not None:
+                    trace.update(final_status="interrupted", fallback_blocked_after_output=True)
+                raise
             if not allows_provider_fallback(exc) or index >= len(attempts) - 1:
                 break
         except Exception as exc:  # noqa: BLE001
@@ -329,6 +333,10 @@ async def stream_text(
                     }
                 )
             logger.warning("AI provider stream failed unexpectedly: provider=%s error=%s", provider_name, repr(exc))
+            if yielded_text:
+                if trace is not None:
+                    trace.update(final_status="interrupted", fallback_blocked_after_output=True)
+                raise last_error from exc
             if index >= len(attempts) - 1:
                 break
 
