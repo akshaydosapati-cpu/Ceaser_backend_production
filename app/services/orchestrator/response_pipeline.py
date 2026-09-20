@@ -9,6 +9,7 @@ from typing import Any
 from app.intelligence.ai.sync import generate_text_sync, stream_text
 from app.intelligence.ai.model_router import request_for_agent, request_for_agents, request_for_chat
 from app.services.llm.provider import LLMProvider
+from app.services.orchestrator.completeness_validator import CompletenessValidator
 
 
 class ResponsePipeline:
@@ -108,6 +109,11 @@ class ResponsePipeline:
         elif trace is not None and emitted:
             continuation_count = 0
             length_limit_detected = trace.get("finish_reason") in {"length", "max_tokens", "token_limit"}
+            
+            # Extract requirements and validate completeness for structured requests
+            requirements = CompletenessValidator.extract_requirements(message)
+            has_structural_requirements = bool(requirements)
+            
             while length_limit_detected and continuation_count < self.MAX_CHAT_CONTINUATIONS:
                 continuation_count += 1
                 continuation_trace: dict[str, Any] = {}
@@ -139,8 +145,52 @@ class ResponsePipeline:
                 trace["length_limit_detected"] = length_limit_detected
                 if not segment_emitted:
                     break
+            
+            # After continuation loop, validate completeness for requests with structural requirements
+            if has_structural_requirements:
+                full_content = "".join(emitted)
+                validation = CompletenessValidator.validate(
+                    message, full_content, continuation_count, self.MAX_CHAT_CONTINUATIONS
+                )
+                trace["completeness_validation"] = {
+                    "is_complete": validation.is_complete,
+                    "requirements_satisfied": validation.requirements_satisfied,
+                    "is_truncated": validation.is_truncated,
+                    "is_mid_sentence": validation.is_mid_sentence,
+                    "has_duplicates": validation.has_duplicates,
+                    "partial_status": validation.partial_status,
+                    "issues": validation.issues,
+                }
+                if not validation.is_complete and validation.partial_status:
+                    trace["structural_completion_blocked"] = True
+                    trace["partial_status"] = validation.partial_status
+            
             if length_limit_detected:
                 trace["continuation_limit_reached"] = True
+
+    @staticmethod
+    def _build_continuation_input(message: str, partial: str, requirements: list) -> str:
+        """Build smarter continuation input based on extracted requirements."""
+        base_input = (
+            f"Original user request: {message}\n\n"
+            f"Tail of the answer already shown to the user: {partial[-8000:]}\n\n"
+            "Continue exactly where the answer stopped. Do not repeat earlier text, headings, or list items. "
+            "Preserve the same format and finish the complete answer. Output only the continuation."
+        )
+
+        # Add specific hints based on requirements
+        if requirements:
+            hints = []
+            for req in requirements:
+                found = CompletenessValidator.count_structures(partial, req.type)
+                if req.count and found < req.count:
+                    remaining = req.count - found
+                    hints.append(f"You still need to add {remaining} more {req.type}.")
+
+            if hints:
+                base_input += " " + " ".join(hints)
+
+        return base_input
 
     @staticmethod
     def _is_code_request(message: str, context: dict) -> bool:
