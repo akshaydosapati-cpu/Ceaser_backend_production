@@ -883,19 +883,24 @@ class CeaserOrchestrator:
             user_message=prepared["message"],
             assistant_response=final_response,
         )
-        suggestions = self._generate_suggestions(
+        # Generate deterministic fallback suggestions inside DB worker to avoid
+        # blocking network LLM call. The async layer will generate AI suggestions
+        # after DB settlement completes.
+        category = self.suggestion_engine._detect_category(
             user_query=prepared["message"],
             response_text=final_response,
-            conversation=prepared.get("conversation"),
-            conversation_context=prepared.get("conversation_context"),
             intent=prepared.get("knowledge_context", {}).get("intent"),
             retrieval_scope=prepared.get("observability", {}).get("retrieval_scope"),
             output_format=prepared.get("knowledge_context", {}).get("output_format"),
             intent_domain=prepared.get("knowledge_context", {}).get("intent_domain"),
             intent_subdomain=prepared.get("knowledge_context", {}).get("intent_subdomain"),
-            request_id=prepared.get("request_id"),
-            parent_message_id=prepared.get("parent_message_id"),
-            active_topic=follow_up_trace.get("active_topic"),
+        )
+        suggestions = self.suggestion_engine._intent_fallback(
+            category=category,
+            user_query=prepared["message"],
+            response_text=final_response,
+            recent_suggestions=self._recent_suggestions(prepared.get("conversation")),
+            max_items=5,
         )
         response_payload = {
             "scope": "personal_ai_os",
