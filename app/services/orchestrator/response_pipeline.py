@@ -288,6 +288,10 @@ class ResponsePipeline:
                 f"Older conversation summary: {conversation_summary}",
             ]
         )
+        persisted_state = context.get("persisted_state") or {}
+        state_context = self._build_state_context(persisted_state)
+        if state_context:
+            continuity_context = continuity_context + "\n\n" + state_context
         research = context.get("research_result")
         merged_contributions = context.get("merged_contributions", {}) or {}
         selected_agents = merged_contributions.get("selected_agents", []) if isinstance(merged_contributions, dict) else []
@@ -586,6 +590,65 @@ class ResponsePipeline:
         if any(term in normalized for term in ["explain", "what is", "how does", "compare", "difference"]):
             return "Return a detailed but easy-to-understand explanation with headings, bullets, examples, and final summary."
         return "Use concise or standard detail based on the request."
+
+    @staticmethod
+    def _build_state_context(persisted_state: dict) -> str:
+        """Build a compact state context string for injection into the prompt.
+
+        Only surfaces active items. Filters deprecated entries.
+        Does NOT expose raw provenance IDs.
+        Returns empty string when state has no meaningful V1 content.
+        """
+        if not persisted_state or not isinstance(persisted_state, dict):
+            return ""
+
+        # Only include if V1 structure is present
+        if "schema_version" not in persisted_state:
+            return ""
+
+        parts: list[str] = []
+
+        def _active(items: list) -> list:
+            return [
+                i for i in (items or [])
+                if isinstance(i, dict) and i.get("status") != "deprecated"
+            ]
+
+        constraints = _active(persisted_state.get("constraints", []))
+        if constraints:
+            lines = [f"  - [{c.get('category', 'general')}] {c.get('description', '')}" for c in constraints[:6]]
+            parts.append("User constraints:\n" + "\n".join(lines))
+
+        facts = _active(persisted_state.get("facts", []))
+        if facts:
+            lines = [f"  - {f.get('content', '')}" for f in facts[:5]]
+            parts.append("Known facts:\n" + "\n".join(lines))
+
+        goals = _active(persisted_state.get("goals", []))
+        if goals:
+            lines = [f"  - {g.get('content', '')}" for g in goals[:4]]
+            parts.append("Goals:\n" + "\n".join(lines))
+
+        decisions = _active(persisted_state.get("decisions", []))
+        if decisions:
+            lines = [f"  - {d.get('content', '')}" for d in decisions[:4]]
+            parts.append("Decisions made:\n" + "\n".join(lines))
+
+        entities = persisted_state.get("entities", []) or []
+        active_entities = [e for e in entities if isinstance(e, dict)]
+        if active_entities:
+            names = [f"{e.get('name', '')} ({e.get('type', '')})" for e in active_entities[:6]]
+            parts.append("Key entities: " + ", ".join(n for n in names if n.strip()))
+
+        open_questions = _active(persisted_state.get("open_questions", []))
+        if open_questions:
+            lines = [f"  - {q.get('content', q.get('question', ''))}" for q in open_questions[:3]]
+            parts.append("Open questions:\n" + "\n".join(lines))
+
+        if not parts:
+            return ""
+
+        return "Conversation state (active only):\n" + "\n\n".join(parts)
 
     def _estimate_tokens(self, text: str) -> int:
         return max(1, round(len(text) / 4))

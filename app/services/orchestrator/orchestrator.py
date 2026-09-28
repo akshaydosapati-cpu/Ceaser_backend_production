@@ -12,7 +12,9 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.core.config.settings import settings
-from app.agents.registry import AgentRegistry
+from app.schemas.task_state import TaskStateSchema
+from app.services.state.state_merger import merge_state
+from app.services.state.user_state_extractor import extract_user_state
 from app.agents.v2 import AgentOrchestrator as SpecialistAgentOrchestrator
 from app.engines.research_engine import ResearchEngine
 from app.models.conversation import Conversation, Message
@@ -2264,7 +2266,7 @@ class CeaserOrchestrator:
         # Read only a compact slice of history so follow-up continuity stays
         # available without dragging the full conversation through every turn.
         messages = self.conversations.list_recent_messages(conversation_id=conversation.id, limit=8)
-        persisted_state = conversation.conversation_state or {}
+        persisted_state = TaskStateSchema.normalize(conversation.conversation_state or {})
         recent_messages = messages[-8:]
         generation_messages = messages[-4:]
         older_messages = messages[:-4]
@@ -3065,6 +3067,7 @@ class CeaserOrchestrator:
         follow_up_trace: dict,
         previous_state: dict,
     ) -> None:
+        # --- Legacy field computation (unchanged behavior) ---
         active_topic = follow_up_trace.get("active_topic") or previous_state.get("active_topic")
         active_subtopic = follow_up_trace.get("active_subtopic") or previous_state.get("active_subtopic")
         entities = list(dict.fromkeys([
@@ -3077,7 +3080,21 @@ class CeaserOrchestrator:
             unfinished_goal = message[:240]
         if any(term in normalized for term in ("done", "finished", "complete the plan", "cancel")):
             unfinished_goal = None
-        state = {
+
+        # --- V1 state merge (deterministic, no network calls) ---
+        # Normalize previous state to V1 structure first
+        v1_state = TaskStateSchema.normalize(previous_state)
+
+        # Extract explicit user-provided state from the current message.
+        # This is purely local/deterministic (no LLM calls).
+        try:
+            v1_state = extract_user_state(message, v1_state)
+        except Exception:
+            # Never crash state persistence due to extraction failure
+            pass
+
+        # Merge updated legacy fields into V1 state
+        v1_state = merge_state(v1_state, {
             "active_topic": active_topic,
             "active_subtopic": active_subtopic,
             "active_task": message[:240],
@@ -3085,10 +3102,12 @@ class CeaserOrchestrator:
             "important_entities": entities,
             "important_decisions": previous_state.get("important_decisions") or [],
             "last_relevant_turn": message[:240],
-        }
+        })
+
+        # --- Summary (unchanged behavior) ---
         summary_parts = [
             f"Topic: {active_topic}" if active_topic else None,
-            f"Current task: {state['active_task']}",
+            f"Current task: {message[:240]}",
             f"Unfinished goal: {unfinished_goal}" if unfinished_goal else None,
             f"Entities: {', '.join(entities)}" if entities else None,
             f"Last response focus: {self._response_focus(response)}" if response else None,
@@ -3096,7 +3115,7 @@ class CeaserOrchestrator:
         self.conversations.update_state(
             conversation,
             summary=" | ".join(part for part in summary_parts if part)[:1200],
-            state=state,
+            state=v1_state,
         )
 
     @staticmethod
