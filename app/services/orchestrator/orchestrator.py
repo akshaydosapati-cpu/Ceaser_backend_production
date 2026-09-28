@@ -27,6 +27,7 @@ from app.services.orchestrator.memory_capture import MemoryCapture
 from app.services.orchestrator.memory_retriever import MemoryRetriever
 from app.services.orchestrator.knowledge_router import KnowledgeRoute, KnowledgeRouter
 from app.services.orchestrator.response_pipeline import ResponsePipeline
+from app.services.orchestrator.response_planner import response_planner
 from app.services.orchestrator.suggestion_engine import SuggestionEngine
 from app.services.project_service import ProjectService
 from app.services.orchestrator.user_context_resolver import UserContextResolver
