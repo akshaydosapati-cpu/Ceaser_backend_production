@@ -15,7 +15,7 @@ from app.core.config.settings import settings
 from app.schemas.task_state import TaskStateSchema
 from app.services.state.state_merger import merge_state
 from app.services.state.user_state_extractor import extract_user_state
-from app.agents.v2 import AgentOrchestrator as SpecialistAgentOrchestrator
+from app.agents.v2 import AgentOrchestrator as SpecialistAgentOrchestrator, AgentRegistry
 from app.engines.research_engine import ResearchEngine
 from app.models.conversation import Conversation, Message
 from app.models.project import Project, ProjectMember
@@ -610,12 +610,20 @@ class CeaserOrchestrator:
         else:
             request_mode = "DIRECT_CHAT"
 
+        # _requires_rich_context fires on topic keywords (business, startup,
+        # strategy). Without attached files there is nothing to retrieve from the
+        # knowledge base, so forcing the full RAG pipeline is wasted work.
+        # Only allow rich-context retrieval when the user actually attached files.
+        rich_context_required = bool(
+            (attached_documents or file_ids)
+            and self._requires_rich_context(message)
+        )
         simple_chat_request = self.fast_chat.accepts(FastChatRequest(
             route=route_decision,
             has_attachments=bool(attached_documents),
             has_file_ids=bool(file_ids),
             report_requested=report_request,
-            rich_context_required=self._requires_rich_context(message),
+            rich_context_required=rich_context_required,
             live_web_requested=force_live_web_search,
         ))
 

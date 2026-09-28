@@ -309,6 +309,17 @@ def test_orchestrator_extracts_generic_research_topics() -> None:
     assert orchestrator._research_query("look up federated data architectures in healthcare") == "federated data architectures in healthcare"
 
 
+def test_orchestrator_initializes_without_name_error() -> None:
+    db = TestingSessionLocal()
+    orchestrator = CeaserOrchestrator(db)
+    db.close()
+
+    assert orchestrator is not None
+    assert orchestrator.agent_registry is not None
+    assert hasattr(orchestrator.agent_registry, "definitions") or hasattr(orchestrator.agent_registry, "get")
+
+
+
 def test_live_research_runs_only_without_internal_context() -> None:
     assert CeaserOrchestrator._should_run_live_research(route=KnowledgeRoute.RESEARCH, has_internal_context=False) is True
     assert CeaserOrchestrator._should_run_live_research(route=KnowledgeRoute.GENERAL, has_internal_context=True) is False
