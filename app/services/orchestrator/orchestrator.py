@@ -2860,6 +2860,8 @@ class CeaserOrchestrator:
         operation = plan_payload.get("operation", "")
         return operation in {"EXPLAIN", "SUMMARIZE", "CLARIFY", "VERIFY"}
 
+    def _contextualize_follow_up(self, message: str, follow_up_trace: dict, response_plan: dict | None = None) -> str:
+        """Build contextualized follow-up message with response plan guidance."""
         if not follow_up_trace.get("follow_up_detected"):
             return message
         operation = response_plan.get("operation") if response_plan else None

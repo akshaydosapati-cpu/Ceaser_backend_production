@@ -2,6 +2,7 @@
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
 
 from app.services.orchestrator.response_pipeline import ResponsePipeline
 from app.services.orchestrator.response_planner import OperationType
@@ -74,6 +75,7 @@ def test_non_generative_operation_check():
         assert CeaserOrchestrator._non_generative_operation(plan) is False
 
 
+@pytest.mark.asyncio
 async def test_stream_routes_based_on_operation():
     """Verify that stream() dispatches EXPLAIN to _stream_non_generative."""
     pipeline = ResponsePipeline()
@@ -93,3 +95,4 @@ async def test_stream_routes_based_on_operation():
             context_create = {"response_plan": {"operation": "CREATE"}}
             chunks = [chunk async for chunk in pipeline.stream("write code", context_create)]
             assert "".join(chunks) == "```\ncode here\n```"
+
