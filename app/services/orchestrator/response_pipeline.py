@@ -45,18 +45,28 @@ class ResponsePipeline:
         instructions, context_text = self._build_prompt(message=message, context=context)
         model_request = self._model_request(message=message, context=context, streaming=True, context_text=context_text)
         output_budget = self._stream_output_budget(message=message, context=context)
+
+        # Get operation from response plan to determine if we need special instructions
+        response_plan = context.get("response_plan", {})
+        operation = response_plan.get("operation", "")
+
         if trace is not None:
             trace["context_tokens"] = self._estimate_tokens(f"{instructions}\n\n{context_text}")
             trace["prompt_tokens"] = trace["context_tokens"]
             trace["prompt_build_ms"] = round((perf_counter() - prompt_started) * 1000, 2)
             trace["max_output_tokens"] = output_budget
             trace["is_non_generative_operation"] = True
-        instructions = (
-            instructions.replace(
-                "Your response is displayed while it streams, so write it exactly in its final polished form from the first token.",
-                "Provide a clear, direct explanation or summary without generating new code. Reference the existing code by describing its parts, not by recreating it."
-            )
-        )
+
+        # For non-generative operations, guide the model to explain without regenerating
+        if operation in {"EXPLAIN", "SUMMARIZE", "CLARIFY"}:
+            constraint_msg = {
+                "EXPLAIN": "Provide a clear, direct explanation without generating new code. Reference the existing code by describing its parts, not by recreating it.",
+                "SUMMARIZE": "Provide a concise summary without regenerating the original artifact.",
+                "CLARIFY": "Ask for clarification about what is unclear, without regenerating the original artifact.",
+            }.get(operation, "Provide a clear explanation without regenerating artifacts.")
+
+            instructions = f"{instructions}\n\nIMPORTANT: {constraint_msg}"
+
         async for chunk in stream_text(instructions=instructions, input_text=context_text, max_output_tokens=output_budget, trace=trace, model_request=model_request):
             yield chunk
 

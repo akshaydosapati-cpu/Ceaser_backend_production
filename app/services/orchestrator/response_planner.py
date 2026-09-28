@@ -41,6 +41,7 @@ class ResponsePlan:
     change_type: str | None  # "addition", "subtraction", "conversion", etc
     constraints: dict[str, Any]  # Domain-specific constraints
     confidence: float  # 0.0-1.0 how confident in this plan
+    allow_artifact_generation: bool = True  # Whether agents should generate/modify artifacts
 
 
 class ResponsePlanner:
@@ -54,7 +55,8 @@ class ResponsePlanner:
     }
     MODIFICATION_WORDS = {
         "change", "fix", "update", "modify", "adjust", "edit", "remove", "add",
-        "replace", "swap", "convert", "rewrite", "shorten", "expand", "simplify"
+        "replace", "swap", "convert", "rewrite", "shorten", "expand", "simplify",
+        "make", "improve", "enhance"
     }
     CONTINUATION_WORDS = {
         "continue", "next", "then", "after", "more", "further", "also",
@@ -104,6 +106,7 @@ class ResponsePlanner:
                 change_type=None,
                 constraints={},
                 confidence=0.9,
+                allow_artifact_generation=False,
             )
 
         # Resolve what artifact/content is being referenced
@@ -139,6 +142,14 @@ class ResponsePlanner:
             OperationType.CLARIFY,
         }
 
+        # Non-generative operations should not produce artifacts
+        allow_artifact_generation = operation not in {
+            OperationType.EXPLAIN,
+            OperationType.SUMMARIZE,
+            OperationType.CLARIFY,
+            OperationType.VERIFY,
+        }
+
         return ResponsePlan(
             operation=operation,
             reference=reference,
@@ -148,6 +159,7 @@ class ResponsePlanner:
             change_type=change_type,
             constraints=constraints,
             confidence=0.85,
+            allow_artifact_generation=allow_artifact_generation,
         )
 
     def _is_reference_to_previous(self, message: str) -> bool:

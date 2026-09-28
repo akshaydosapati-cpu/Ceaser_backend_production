@@ -665,8 +665,6 @@ class CeaserOrchestrator:
                 research_result = self._maybe_research(query=self._research_query(message, conversation_context), selected_agent_names=selected_agent_names)
         elif request_mode != "DIRECT_CHAT":
             selected_agent_names = self._default_stream_agents(message)
-        if self._non_generative_operation(response_plan_payload):
-            selected_agent_names = [name for name in selected_agent_names if str(name).lower() != "bolt"]
         mark_stage("agent_or_workflow_selection")
 
         routing_finished = perf_counter()
