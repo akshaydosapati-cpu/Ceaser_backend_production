@@ -61,6 +61,7 @@ class ResponsePipeline:
             yield chunk
 
     async def _stream_generative(self, message: str, context: dict, trace: dict[str, Any] | None) -> AsyncIterator[str]:
+        prompt_started = perf_counter()
         instructions, context_text = self._build_prompt(message=message, context=context)
         model_request = self._model_request(message=message, context=context, streaming=True, context_text=context_text)
         output_budget = self._stream_output_budget(message=message, context=context)
