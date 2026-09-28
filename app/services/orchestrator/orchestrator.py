@@ -27,7 +27,7 @@ from app.services.orchestrator.memory_capture import MemoryCapture
 from app.services.orchestrator.memory_retriever import MemoryRetriever
 from app.services.orchestrator.knowledge_router import KnowledgeRoute, KnowledgeRouter
 from app.services.orchestrator.response_pipeline import ResponsePipeline
-from app.services.orchestrator.response_planner import response_planner
+from app.services.orchestrator.response_planner import OperationType, response_planner
 from app.services.orchestrator.suggestion_engine import SuggestionEngine
 from app.services.project_service import ProjectService
 from app.services.orchestrator.user_context_resolver import UserContextResolver
@@ -114,7 +114,17 @@ class CeaserOrchestrator:
             conversation_context=conversation_context,
             parent_message_id=parent_message_id,
         )
-        effective_message = self._contextualize_follow_up(effective_message, follow_up_trace)
+        previous_artifacts = self._previous_artifacts(conversation_context)
+        response_plan = response_planner.plan(
+            message,
+            conversation_context=conversation_context,
+            previous_artifacts=previous_artifacts,
+            follow_up_trace=follow_up_trace,
+        )
+        response_plan_payload = self._response_plan_payload(response_plan)
+        effective_message = self._contextualize_follow_up(
+            effective_message, follow_up_trace, response_plan=response_plan_payload
+        )
         route_decision = self.knowledge_router.classify(
             message=message,
             has_attached_files=bool(attached_documents),
@@ -258,6 +268,8 @@ class CeaserOrchestrator:
         if self._is_explicit_workflow_creation_request(message):
             workflow = self.workflow_orchestrator.run(user_id=user_id, message=message, conversation_id=conversation_id, file_ids=file_ids or [])
         selected_agent_names = workflow.selected_agents if workflow else self._default_stream_agents(message)
+        if self._non_generative_operation(response_plan_payload):
+            selected_agent_names = [name for name in selected_agent_names if str(name).lower() != "bolt"]
         report_request = self._is_report_request(message)
         memory_first_context: dict[str, Any] | None = None
         memory_first_results: list[dict] = []
@@ -486,7 +498,17 @@ class CeaserOrchestrator:
             conversation_context=conversation_context,
             parent_message_id=parent_message_id,
         )
-        effective_message = self._contextualize_follow_up(effective_message, follow_up_trace)
+        previous_artifacts = self._previous_artifacts(conversation_context)
+        response_plan = response_planner.plan(
+            message,
+            conversation_context=conversation_context,
+            previous_artifacts=previous_artifacts,
+            follow_up_trace=follow_up_trace,
+        )
+        response_plan_payload = self._response_plan_payload(response_plan)
+        effective_message = self._contextualize_follow_up(
+            effective_message, follow_up_trace, response_plan=response_plan_payload
+        )
         route_decision = self.knowledge_router.classify(
             message=message,
             has_attached_files=bool(attached_documents),
@@ -643,6 +665,8 @@ class CeaserOrchestrator:
                 research_result = self._maybe_research(query=self._research_query(message, conversation_context), selected_agent_names=selected_agent_names)
         elif request_mode != "DIRECT_CHAT":
             selected_agent_names = self._default_stream_agents(message)
+        if self._non_generative_operation(response_plan_payload):
+            selected_agent_names = [name for name in selected_agent_names if str(name).lower() != "bolt"]
         mark_stage("agent_or_workflow_selection")
 
         routing_finished = perf_counter()
@@ -672,8 +696,18 @@ class CeaserOrchestrator:
             memories=memory_first_results,
         )
         tool_calls_started = perf_counter()
-        is_coding_request = "Bolt" in selected_agent_names or bool(
-            re.search(r"\b(?:code|coding|program|script|function|component|html|css|javascript|typescript|python|java|sql|debug)\b", message, re.I)
+        is_coding_request = (
+            not self._non_generative_operation(response_plan_payload)
+            and (
+                "Bolt" in selected_agent_names
+                or bool(
+                    re.search(
+                        r"\b(?:code|coding|program|script|function|component|html|css|javascript|typescript|python|java|sql|debug)\b",
+                        message,
+                        re.I,
+                    )
+                )
+            )
         )
         explicit_research_request = bool(re.search(r"\b(?:search|research|latest|current|documentation|docs|sources)\b", message, re.I))
         web_search_requested = (not is_coding_request or explicit_research_request) and (
@@ -808,6 +842,7 @@ class CeaserOrchestrator:
                 "documents": attached_documents,
                 "knowledge_context": knowledge_context,
                 "follow_up_trace": follow_up_trace,
+                "response_plan": response_plan_payload,
                 "merged_contributions": {
                     "selected_agents": selected_agent_names,
                     "contributions": workflow.contributions if workflow else [],
@@ -2780,9 +2815,65 @@ class CeaserOrchestrator:
         cleaned = self._clean_research_query(message)
         return f"{prefix}{previous_query} {cleaned}".strip()
 
-    def _contextualize_follow_up(self, message: str, follow_up_trace: dict) -> str:
+    @staticmethod
+    def _previous_artifacts(conversation_context: dict) -> list[dict]:
+        """Extract artifacts from conversation messages for response planning."""
+        artifacts = []
+        for msg in reversed(conversation_context.get("messages", [])):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", "")
+            if "```" in content:
+                artifact_type = "code"
+                if "```html" in content or "```javascript" in content:
+                    artifact_type = "code"
+                elif "# " in content or "## " in content:
+                    artifact_type = "document"
+                artifacts.append({
+                    "id": f"artifact_{len(artifacts)}",
+                    "type": artifact_type,
+                    "format": "markdown",
+                    "content": content[:2000],
+                })
+        return artifacts
+
+    @staticmethod
+    def _response_plan_payload(plan) -> dict:
+        """Convert ResponsePlan to a serializable payload for the context."""
+        if plan is None:
+            return {}
+        from dataclasses import asdict
+        return asdict(plan) if hasattr(plan, "__dataclass_fields__") else {
+            "operation": str(plan.operation) if plan.operation else None,
+            "reference": plan.reference,
+            "target_artifact_id": plan.target_artifact_id,
+            "preserve_format": plan.preserve_format,
+            "output_mode": plan.output_mode,
+            "change_type": plan.change_type,
+            "constraints": plan.constraints,
+            "confidence": plan.confidence,
+        }
+
+    @staticmethod
+    def _non_generative_operation(plan_payload: dict) -> bool:
+        """Check if the operation should not generate new code."""
+        operation = plan_payload.get("operation", "")
+        return operation in {"EXPLAIN", "SUMMARIZE", "CLARIFY", "VERIFY"}
+
         if not follow_up_trace.get("follow_up_detected"):
             return message
+        operation = response_plan.get("operation") if response_plan else None
+        if operation in {"EXPLAIN", "SUMMARIZE", "CLARIFY"}:
+            if not (follow_up_trace.get("active_topic") or "").strip():
+                return message
+            topic = (follow_up_trace.get("active_topic") or "").strip()
+            subtopic = (follow_up_trace.get("active_subtopic") or "").strip()
+            focus = f" Focus on the {subtopic}." if subtopic else ""
+            return (
+                f"System instruction: Explain the active topic in {response_plan.get('constraints', {}).get('complexity', 'clear')} language without regenerating the entire artifact.{focus}\n"
+                f"Active topic: {topic}\n"
+                f"Current user message: {message}"
+            )
         topic = (follow_up_trace.get("active_topic") or "").strip()
         if not topic:
             return message

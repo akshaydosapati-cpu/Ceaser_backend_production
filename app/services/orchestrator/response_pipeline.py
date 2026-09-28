@@ -31,7 +31,36 @@ class ResponsePipeline:
             return "AI service is temporarily unavailable. Please try again later."
 
     async def stream(self, message: str, context: dict, *, trace: dict[str, Any] | None = None) -> AsyncIterator[str]:
+        response_plan = context.get("response_plan", {})
+        operation = response_plan.get("operation")
+        if operation in {"EXPLAIN", "SUMMARIZE", "CLARIFY"}:
+            async for chunk in self._stream_non_generative(message, context, trace):
+                yield chunk
+        else:
+            async for chunk in self._stream_generative(message, context, trace):
+                yield chunk
+    async def _stream_non_generative(self, message: str, context: dict, trace: dict[str, Any] | None) -> AsyncIterator[str]:
+        """Stream EXPLAIN/SUMMARIZE/CLARIFY responses without regenerating code artifacts."""
         prompt_started = perf_counter()
+        instructions, context_text = self._build_prompt(message=message, context=context)
+        model_request = self._model_request(message=message, context=context, streaming=True, context_text=context_text)
+        output_budget = self._stream_output_budget(message=message, context=context)
+        if trace is not None:
+            trace["context_tokens"] = self._estimate_tokens(f"{instructions}\n\n{context_text}")
+            trace["prompt_tokens"] = trace["context_tokens"]
+            trace["prompt_build_ms"] = round((perf_counter() - prompt_started) * 1000, 2)
+            trace["max_output_tokens"] = output_budget
+            trace["is_non_generative_operation"] = True
+        instructions = (
+            instructions.replace(
+                "Your response is displayed while it streams, so write it exactly in its final polished form from the first token.",
+                "Provide a clear, direct explanation or summary without generating new code. Reference the existing code by describing its parts, not by recreating it."
+            )
+        )
+        async for chunk in stream_text(instructions=instructions, input_text=context_text, max_output_tokens=output_budget, trace=trace, model_request=model_request):
+            yield chunk
+
+    async def _stream_generative(self, message: str, context: dict, trace: dict[str, Any] | None) -> AsyncIterator[str]:
         instructions, context_text = self._build_prompt(message=message, context=context)
         model_request = self._model_request(message=message, context=context, streaming=True, context_text=context_text)
         output_budget = self._stream_output_budget(message=message, context=context)
