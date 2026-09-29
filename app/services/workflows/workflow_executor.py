@@ -48,7 +48,7 @@ class WorkflowExecutor:
                     await run_serial_db(self._update_step_unavailable, run, plan, outputs, step, planned)
                     return self._goal_result(run, outputs)
                 if planned.confirmation_required and confirmed_capability != planned.capability:
-                    await run_serial_db(self._update_step_confirmation_wait, run, planned, metadata)
+                    await run_serial_db(self._update_step_confirmation_wait, run, planned)
                     return self._goal_result(run, outputs)
 
                 step_inputs = {name: outputs[name] for name in planned.input_refs if name in outputs}
@@ -96,11 +96,13 @@ class WorkflowExecutor:
         run.status = "failed"
         self._persist_goal_state(run, plan, outputs)
 
-    def _update_step_confirmation_wait(self, run: WorkflowRun, planned, metadata: dict) -> None:
-        run.status = "waiting_for_user"
+    def _update_step_confirmation_wait(self, run: WorkflowRun, planned) -> None:
+        metadata = dict(run.metadata_json or {})
         metadata["pending_confirmation"] = {"capability": planned.capability, "step_id": planned.step_id}
+        run.status = "waiting_for_user"
         run.metadata_json = metadata
         self.db.commit()
+        self.db.refresh(run)
 
     def _update_step_completed(self, run: WorkflowRun, plan: GoalWorkflowPlan, outputs: dict, step: WorkflowStep, planned, outcome) -> None:
         step.status = "completed"

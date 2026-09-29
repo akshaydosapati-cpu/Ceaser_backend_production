@@ -488,8 +488,7 @@ async def ceaser_chat_stream(request: Request, payload: CeaserChatRequest, user:
             logger.info("ceaser_stream_stage request_id=%s stage=retrieval_started", request_id)
             prepare_started = perf_counter()
             trace["prepare_started_ms"] = round((prepare_started - started) * 1000, 2)
-            prepared = await run_serial_db(
-                orchestrator.prepare_stream_request,
+            prepared = await orchestrator.prepare_stream_request(
                 user_id=user_id,
                 message=message,
                 conversation_id=conversation_id,
