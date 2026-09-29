@@ -665,6 +665,9 @@ class CeaserOrchestrator:
             selected_agent_names = self._default_stream_agents(message)
         mark_stage("agent_or_workflow_selection")
 
+        # Store workflow result in prepared so finalize_stream_response can access it
+        workflow_result = workflow if explicit_workflow else None
+
         routing_finished = perf_counter()
         retrieval_started = perf_counter()
 
@@ -856,6 +859,7 @@ class CeaserOrchestrator:
         observability["prepare_unattributed_ms"] = round(max(0.0, observability["prepare_ms"] - sum(
             stage["duration_ms"] for stage in request_trace.get("stage_timings", [])
         ) - observability["prepare_logging_ms"]), 2)
+        prepared["workflow"] = workflow_result
         return prepared
 
     def begin_stream_response(self, prepared: dict[str, Any]) -> Message | None:
