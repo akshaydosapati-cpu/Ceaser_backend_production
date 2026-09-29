@@ -265,9 +265,7 @@ class CeaserOrchestrator:
             )
 
         workflow = None
-        if self._is_explicit_workflow_creation_request(message):
-            workflow = await self.workflow_orchestrator.run(user_id=user_id, message=message, conversation_id=conversation_id, file_ids=file_ids or [])
-        selected_agent_names = workflow.selected_agents if workflow else self._default_stream_agents(message)
+        selected_agent_names = self._default_stream_agents(message)
         if self._non_generative_operation(response_plan_payload):
             selected_agent_names = [name for name in selected_agent_names if str(name).lower() != "bolt"]
         report_request = self._is_report_request(message)
