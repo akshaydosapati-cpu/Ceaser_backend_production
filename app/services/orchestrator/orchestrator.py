@@ -284,10 +284,15 @@ class CeaserOrchestrator:
             knowledge_context=memory_first_context,
             memories=memory_first_results,
         )
-        research_result = self._maybe_research(
+        research_result = self._execute_research(
+            user_id=user_id,
+            message=message,
+            conversation_id=conversation.id if conversation else conversation_id,
+            conversation_context=conversation_context,
             query=self._research_query(message, conversation_context),
             selected_agent_names=selected_agent_names,
-        ) if self._should_run_live_research(route=route_decision.route, has_internal_context=has_internal_context) else None
+            should_run_research=self._should_run_live_research(route=route_decision.route, has_internal_context=has_internal_context),
+        )
         lightweight_follow_up = route_decision.route is KnowledgeRoute.FOLLOW_UP
         lightweight_normal = route_decision.route in {KnowledgeRoute.GENERAL, KnowledgeRoute.DESKTOP} and not self._requires_rich_context(message) and memory_first_context is None
         knowledge_context = memory_first_context or (self._lightweight_follow_up_context(follow_up_trace) if lightweight_follow_up else self._minimal_chat_context() if lightweight_normal else self._knowledge_context(
@@ -2459,6 +2464,82 @@ class CeaserOrchestrator:
             query,
             include_images=self._should_include_research_images(query, selected_agent_names),
         )
+
+    def _execute_research(
+        self,
+        user_id: str,
+        message: str,
+        conversation_id: str | None,
+        conversation_context: dict | None,
+        query: str,
+        selected_agent_names: list[str],
+        should_run_research: bool,
+    ):
+        """Execute research using LangGraph Alex if enabled, otherwise use existing engine.
+
+        Phase 3: Conditional integration of LangGraph research agent.
+        Falls back to existing ResearchEngine if Alex fails or flag is disabled.
+        """
+        if not should_run_research:
+            return None
+
+        if not settings.enable_langgraph_research:
+            # Current path: existing research engine
+            return self._maybe_research(query, selected_agent_names)
+
+        # Phase 3: LangGraph Alex path with fallback
+        try:
+            from app.agents.langgraph.context_adapter import ContextAdapter
+            from app.agents.langgraph.factory import create_research_agent
+
+            # Build context from existing CEASER services
+            context_adapter = ContextAdapter(db=self.db)
+            research_context = context_adapter.build_research_context(
+                user_id=user_id,
+                query=query,
+                conversation_id=conversation_id,
+                message_limit=10,
+                memory_limit=5,
+            )
+
+            # Create and invoke LangGraph Alex
+            agent = create_research_agent(
+                db=self.db,
+                user_id=user_id,
+                initial_context=research_context,
+            )
+            result = agent.invoke(query)
+
+            # Convert LangGraph result to ResearchResult format
+            # The result contains: user_goal, messages, research_result, final_response
+            if result and result.get("research_result"):
+                research_data = result["research_result"]
+                from app.engines.research_engine.engine import ResearchResult
+
+                return ResearchResult(
+                    query=result.get("user_goal", query),
+                    summary=result.get("final_response", ""),
+                    sources=research_data.get("sources", []),
+                    key_findings=research_data.get("key_findings", []),
+                    citations=research_data.get("citations", []),
+                    images=research_data.get("images", []),
+                    timings=research_data.get("timings", {}),
+                )
+            return None
+        except Exception as e:
+            # Fallback: log safely and use existing research engine
+            logger.warning(
+                "LangGraph research failed, falling back to ResearchEngine",
+                extra={"error_type": type(e).__name__, "user_id": user_id},
+            )
+            try:
+                return self._maybe_research(query, selected_agent_names)
+            except Exception as fallback_error:
+                logger.error(
+                    "Fallback research also failed",
+                    extra={"error_type": type(fallback_error).__name__, "user_id": user_id},
+                )
+                return None
 
     @staticmethod
     def _generate_image_response(

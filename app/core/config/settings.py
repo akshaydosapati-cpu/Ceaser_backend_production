@@ -216,6 +216,7 @@ class Settings(BaseSettings):
     credit_referral_monthly_cap: int = Field(default=10, alias="CREDIT_REFERRAL_MONTHLY_CAP")
     credit_costs_raw: str = Field(default='{"ai_conversation":2,"research":10,"agent_workflow":20,"bolt_development":30,"local_command":0}', alias="CREDIT_COSTS_JSON")
     admin_emails_raw: str = Field(default="", alias="ADMIN_EMAILS")
+    enable_langgraph_research: bool = Field(default=False, alias="ENABLE_LANGGRAPH_RESEARCH")
 
     @property
     def cors_origins(self) -> list[str]:
