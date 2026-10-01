@@ -109,12 +109,14 @@ def generate_text_sync(
                 index,
             )
             try:
+                tools = request.tools if request and hasattr(request, 'tools') else None
                 generate = provider.generate(
                     instructions=instructions,
                     input_text=input_text,
                     model=selection.model.provider_model_name,
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
+                    tools=tools,
                 )
                 text = await asyncio.wait_for(generate, timeout=timeout_seconds) if timeout_seconds is not None else await generate
                 text = _usable_text(text)
@@ -245,12 +247,16 @@ async def stream_text(
                             trace.get("fallback_from"),
                             trace.get("fallback_reason"),
                         )
+            # Extract tools from model_request if available
+            tools = request.tools if request and hasattr(request, 'tools') else None
+
             async for chunk in provider.stream(
                 instructions=instructions,
                 input_text=input_text,
                 model=selection.model.provider_model_name,
                 max_output_tokens=max_output_tokens,
                 trace=trace,
+                tools=tools,
             ):
                 if not chunk:
                     continue
