@@ -318,7 +318,7 @@ class CeaserOrchestrator:
                 "cloud_resources": knowledge_context.get("resources", []) if isinstance(knowledge_context, dict) else [],
                 "available_capabilities": [item for definition in self.specialist_agents.registry.enabled() for item in definition.allowed_capability_categories],
             },
-        )
+        ) if settings.agents_enabled else None
         captured_memories = self.memory_capture.capture(user_id=user_id, message=message)
         final_response = self.response_pipeline.generate(
             message=message,
@@ -2743,6 +2743,8 @@ class CeaserOrchestrator:
         }
 
     def _default_stream_agents(self, message: str) -> list[str]:
+        if not settings.agents_enabled:
+            return []
         selection = self.specialist_agents.select(message)
         if selection.route != "SPECIALIST":
             return []

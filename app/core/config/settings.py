@@ -217,6 +217,7 @@ class Settings(BaseSettings):
     credit_costs_raw: str = Field(default='{"ai_conversation":2,"research":10,"agent_workflow":20,"bolt_development":30,"local_command":0}', alias="CREDIT_COSTS_JSON")
     admin_emails_raw: str = Field(default="", alias="ADMIN_EMAILS")
     enable_langgraph_research: bool = Field(default=False, alias="ENABLE_LANGGRAPH_RESEARCH")
+    agents_enabled: bool = Field(default=False, alias="CEASER_AGENTS_ENABLED")
 
     @property
     def cors_origins(self) -> list[str]:
