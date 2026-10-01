@@ -267,8 +267,7 @@ class ResponsePipeline:
         normalized = re.sub(r"^\s*```(?:html|javascript|js|css)?\s*", "", chunk, count=1, flags=re.I)
         return re.sub(r"\s*```(?:html|javascript|js|css)?\s*$", "", normalized, count=1, flags=re.I)
 
-    @staticmethod
-    def _model_request(*, message: str, context: dict, streaming: bool, context_text: str):
+    def _model_request(self, *, message: str, context: dict, streaming: bool, context_text: str):
         merged = context.get("merged_contributions", {}) if isinstance(context, dict) else {}
         selected = merged.get("selected_agents", []) if isinstance(merged, dict) else []
         preferred_model = str(context.get("model_preference") or "").strip() or None
@@ -279,7 +278,12 @@ class ResponsePipeline:
         if ResponsePipeline._is_code_request(message, context):
             return request_for_agent("bolt", streaming=streaming, context_size_estimate=max(1, len(context_text) // 4), preferred_model_ids=preferred_model_ids or None)
         task_type = "reasoning" if any(term in normalized for term in ("compare", "strategy", "analyze", "analyse", "trade-off", "why")) else "general"
-        return request_for_chat(streaming=streaming, context_size_estimate=max(1, len(context_text) // 4), task_type=task_type, preferred_model_ids=preferred_model_ids or None)
+        return self._model_request_with_tools(
+            message=message,
+            context=context,
+            streaming=streaming,
+            context_text=context_text,
+        )
 
     @staticmethod
     def _stream_output_budget(*, message: str, context: dict) -> int:
@@ -707,3 +711,69 @@ class ResponsePipeline:
                 }
             )
         return compact
+
+    def _build_tool_routing_rule(self) -> str:
+        """Rule for tool usage in LLM responses."""
+        return (
+            "TOOL USAGE RULE: You can use tools to access integrations. "
+            "Available tools are provided in the 'tools' field. When calling a tool, "
+            "return a JSON object with: {\"tool_name\": \"name\", \"arguments\": {\"key\": \"value\"}}. "
+            "For read-only operations, execute directly. For write operations that modify state, "
+            "confirm with the user before proceeding. "
+            "After tool execution, integrate results naturally into your response."
+        )
+
+    def _extract_tools_from_context(self, context: dict) -> list[dict] | None:
+        """Extract tool definitions from context if available.
+
+        Args:
+            context: Request context containing integration tools
+
+        Returns:
+            List of tool definitions or None if no tools available
+        """
+        if not isinstance(context, dict):
+            return None
+
+        tools = context.get("integration_tools")
+        if tools and isinstance(tools, list):
+            return tools
+
+        return None
+
+    def _model_request_with_tools(
+        self,
+        *,
+        message: str,
+        context: dict,
+        streaming: bool,
+        context_text: str,
+    ) -> Any:
+        """Build model request with tools if available.
+
+        Args:
+            message: User message
+            context: Request context
+            streaming: Whether streaming is enabled
+            context_text: Context text to include
+
+        Returns:
+            ModelRequest with tools if available
+        """
+        from app.intelligence.ai.model_router import request_for_chat
+        from app.intelligence.ai.model_router.request_builder import request_with_tools
+
+        # Get base model request
+        model_request = request_for_chat(
+            streaming=streaming,
+            context_size_estimate=max(1, len(context_text) // 4),
+        )
+
+        # Check if tools are available in context
+        tools = self._extract_tools_from_context(context)
+
+        if tools:
+            # Add tools to request
+            return request_with_tools(model_request, tools)
+
+        return model_request

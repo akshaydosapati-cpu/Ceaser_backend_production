@@ -320,6 +320,9 @@ class CeaserOrchestrator:
             },
         ) if settings.agents_enabled else None
         captured_memories = self.memory_capture.capture(user_id=user_id, message=message)
+        # Build integration tools context for LLM tool calling
+        integration_tools_context = self._build_integration_tools_context(user_id)
+
         final_response = self.response_pipeline.generate(
             message=message,
             context={
@@ -346,6 +349,7 @@ class CeaserOrchestrator:
                 "research_result": research_result.model_dump() if research_result else None,
                 "model_preference": model_preference,
                 "force_live_web_search": force_live_web_search,
+                **integration_tools_context,
             },
         )
         captured_response_memories = self.memory_capture.capture_interaction(
@@ -3456,3 +3460,35 @@ class CeaserOrchestrator:
             return LocalBoltDispatcher(self.db).dispatch(user, message, task_id=request_id)
         except (ValueError, RuntimeError):
             return {"status": "failed", "reason": "bolt_plan_invalid"}
+
+    def _build_integration_tools_context(self, user_id: str) -> dict:
+        """Build integration tools context for LLM tool calling.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            Context dict with integration_tools key if tools available
+        """
+        from app.services.integrations.integration_tool_service import IntegrationToolService
+        from app.intelligence.ai.model_router.models import ToolDefinition
+
+        tool_service = IntegrationToolService(self.db)
+        tools = tool_service.get_available_tools(user_id)
+
+        if not tools:
+            return {}
+
+        # Convert to OpenAI-compatible tool format
+        tool_defs = []
+        for t in tools:
+            tool_defs.append({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                },
+            })
+
+        return {"integration_tools": tool_defs}
