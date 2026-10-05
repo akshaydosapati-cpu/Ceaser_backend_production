@@ -23,8 +23,12 @@ from app.services.audit_service import AuditService
 from app.services.voice.voice_manager import VoiceManager
 from app.services.voice.voice_session import VoiceSessionManager
 from app.services.voice.voice_settings import VoiceSettingsService
+from app.api.voice.elevenlabs_routes import router as elevenlabs_router
 
 router = APIRouter(prefix="/voice", tags=["voice"])
+
+# Include ElevenLabs streaming router
+router.include_router(elevenlabs_router)
 
 
 @router.post("/transcribe", response_model=VoiceTranscribeResponse)
