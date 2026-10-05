@@ -38,11 +38,9 @@ class MemoryRepository:
         return None
 
     def search(self, query: str, user_id: str | None = None) -> list[Memory]:
-        db_query = self.db.query(Memory)
+        query_expr = self.db.query(Memory)
         if user_id:
-            db_query = db_query.filter(Memory.user_id == user_id)
-        memories = db_query.order_by(Memory.created_at.desc()).all()
-        if not query:
-            return memories
-        normalized_query = query.lower()
-        return [memory for memory in memories if normalized_query in memory.content.lower()]
+            query_expr = query_expr.filter(Memory.user_id == user_id)
+        if query:
+            query_expr = query_expr.filter(Memory.content.ilike(f"%{query}%"))
+        return query_expr.order_by(Memory.created_at.desc()).all()

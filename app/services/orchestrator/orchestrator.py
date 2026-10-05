@@ -107,7 +107,7 @@ class CeaserOrchestrator:
             names = ", ".join(document["name"] for document in attached_documents)
             effective_message = f"{message}\n\nAttached document(s): {names}"
 
-        conversation = self._get_conversation(conversation_id)
+        conversation = self._get_conversation(conversation_id, user_id=user_id)
         conversation_context = self._conversation_context(conversation)
         follow_up_trace = self._follow_up_trace(
             message=message,
@@ -2275,6 +2275,7 @@ class CeaserOrchestrator:
                 Conversation.id == conversation_id, Conversation.user_id == user_id,
             ).first()
             if conversation is None:
+                logger.error("Conversation not found for id %s and user %s", conversation_id, user_id)
                 raise ValueError("Conversation not found.")
             return conversation
         return self.conversations.get(conversation_id)
