@@ -22,6 +22,7 @@ class ResponsePipeline:
     def generate(self, message: str, context: dict) -> str:
         instructions, context_text = self._build_prompt(message=message, context=context)
         model_request = self._model_request(message=message, context=context, streaming=False, context_text=context_text)
+
         try:
             response = generate_text_sync(instructions=instructions, input_text=context_text, model_request=model_request)
             return self.normalize_structured_response(response, project_report=self._is_project_report_context(context)) if self.requires_structured_response(context) else response
